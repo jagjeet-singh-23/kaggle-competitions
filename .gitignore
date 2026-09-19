@@ -1,0 +1,20 @@
+# Competition data is never committed. It is large (33 GB across the three) and
+# redistributing it breaks the competition rules and the dataset licences
+# (LANL: competition rules; BirdCLEF: CC BY-NC-SA 4.0; Enveda: CC BY-NC 4.0).
+# Run ./fetch_data.sh to pull it from Kaggle after accepting each competition's rules.
+data/
+
+# Derived caches and outputs
+*.npy
+*.parquet
+*.zip
+submission.csv
+
+# Credentials — never commit; the scripts read ~/.kaggle/kaggle.json at runtime
+kaggle.json
+.env
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.gstack/
