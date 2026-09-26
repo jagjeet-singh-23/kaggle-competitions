@@ -27,3 +27,9 @@ __pycache__/
 # notebook imports one copy instead of pasting the source in. Regenerate with:
 #   cp metric.py library.py search.py analog.py kernel/code/
 MoleculeID-from-Mass-Spectra/kernel/code/
+
+# Kernel staging: copies of modules + the BirdNET weights and pip wheels, uploaded to
+# Kaggle as datasets so the notebooks import one copy and install offline.
+BirdCLEF/kernel/code/
+BirdCLEF/kernel/wheels/
+MoleculeID-from-Mass-Spectra/kernel/wheels/

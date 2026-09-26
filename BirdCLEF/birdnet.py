@@ -18,8 +18,12 @@ import numpy as np
 from scipy.signal import resample_poly
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL = f"{DIR}/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite"
-LABELS = f"{DIR}/models/BirdNET_GLOBAL_6K_V2.4_Labels.txt"
+
+# A Kaggle kernel has no internet, so the weights arrive as an attached dataset at a
+# path that is not next to this file. Everything else about the wrapper is unchanged.
+MODELS = os.environ.get("BIRDNET_DIR", f"{DIR}/models")
+MODEL = f"{MODELS}/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite"
+LABELS = f"{MODELS}/BirdNET_GLOBAL_6K_V2.4_Labels.txt"
 
 SR_IN = 32_000       # competition audio
 SR_BN = 48_000       # what BirdNET expects

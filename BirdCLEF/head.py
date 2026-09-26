@@ -22,7 +22,7 @@ from birdnet import species_map
 from cv import macro_auc, zero_shot
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
+DATA = os.environ.get("BIRDCLEF_DATA", f"{DIR}/data")
 FOLDS = 5
 
 

@@ -16,7 +16,7 @@ import soundfile as sf
 from birdnet import BirdNET, to_chunks, fold, SR_IN, WIN
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
+DATA = os.environ.get("BIRDCLEF_DATA", f"{DIR}/data")
 OUT = f"{DATA}/labelled.npz"
 
 

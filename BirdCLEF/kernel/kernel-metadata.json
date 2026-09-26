@@ -1,14 +1,16 @@
 {
-  "id": "jagjeetsingh23/birdclef-2026-rung0",
-  "title": "birdclef-2026-rung0",
-  "code_file": "rung0.py",
+  "id": "jagjeetsingh23/birdclef26-birdnet-head",
+  "title": "BirdCLEF26 BirdNET head",
+  "code_file": "birdclef_submit.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": true,
   "enable_gpu": false,
-  "enable_tpu": false,
   "enable_internet": false,
   "competition_sources": ["birdclef-2026"],
-  "dataset_sources": [],
+  "dataset_sources": [
+    "jagjeetsingh23/birdclef-kernel-code",
+    "jagjeetsingh23/birdclef-kernel-assets"
+  ],
   "kernel_sources": []
 }

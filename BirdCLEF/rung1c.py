@@ -32,7 +32,7 @@ from sklearn.model_selection import GroupKFold
 from cv import macro_auc, zero_shot
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
+DATA = os.environ.get("BIRDCLEF_DATA", f"{DIR}/data")
 SHARDS = f"{DATA}/emb_train"
 FOLDS = 5
 D = 1024

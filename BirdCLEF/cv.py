@@ -17,7 +17,7 @@ from sklearn.metrics import roc_auc_score
 from birdnet import species_map
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
+DATA = os.environ.get("BIRDCLEF_DATA", f"{DIR}/data")
 
 
 def macro_auc(Y, P, per_class=False):

@@ -19,16 +19,41 @@ The code comes from an attached dataset rather than being pasted in, so there is
 copy of it and it cannot drift from what the held-out evaluation measured.
 """
 import os
+import subprocess
 import sys
 import time
 
-# The competition mounts at a different path depending on whether the kernel was
-# created in the browser or pushed through the API, so resolve it rather than guess.
-COMP = next(p for p in ("/kaggle/input/enveda-CASMI26-molecule-id-mass-spectra",
-                        "/kaggle/input/competitions/enveda-CASMI26-molecule-id-mass-spectra")
-            if os.path.exists(f"{p}/test.parquet"))
-CODE = next(p for p in ("/kaggle/input/casmi26-molecule-id-code",)
-            if os.path.exists(f"{p}/library.py"))
+# Mount paths differ between browser-created and API-pushed kernels, and guessing
+# them cost a run that died in one second. Find the directories by their contents
+# instead, and print the tree first so a wrong guess is diagnosable from the log.
+print("/kaggle/input contains:", flush=True)
+for dirpath, dirnames, files in os.walk("/kaggle/input"):
+    depth = dirpath.count("/") - 2
+    if depth <= 2:
+        print(f"  {'  ' * depth}{dirpath}  ({len(files)} files)", flush=True)
+
+
+def find(marker, root="/kaggle/input"):
+    for dirpath, _, files in os.walk(root):
+        if marker in files:
+            return dirpath
+    raise FileNotFoundError(f"{marker} not found anywhere under {root}")
+
+
+COMP = find("test.parquet")
+CODE = find("library.py")
+
+# RDKit is not in the Kaggle image and there is no internet to fetch it, so the wheel
+# is attached as a dataset and installed offline. The version is pinned because the
+# metric is an InChIKey comparison after tautomer canonicalisation, which is
+# version-dependent: a different RDKit scores the same prediction differently.
+try:
+    import rdkit  # noqa: F401
+except ModuleNotFoundError:
+    wheels = find("rdkit-2026.3.3-cp312-cp312-manylinux_2_28_x86_64.whl")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-index",
+                           "--find-links", wheels, "--no-deps", "rdkit==2026.3.3"])
+    print("installed rdkit offline", flush=True)
 
 os.environ["CASMI_DATA"] = COMP          # read-only competition files
 os.environ["CASMI_WORK"] = "/tmp/casmi"  # writable scratch, not committed as output
@@ -41,7 +66,7 @@ import analog             # noqa: E402
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)
 
-step(f"competition at {COMP}")
+step(f"competition at {COMP}, code at {CODE}")
 library.build()
 step(f"index built: {library.SHARDS}")
 
