@@ -18,8 +18,13 @@ import numpy as np
 import pyarrow.parquet as pq
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
-SHARDS = f"{DATA}/index"     # one npz per row group: bounded memory, and resumable
+
+# DATA is where the competition files live and WORK is where derived artifacts go.
+# They are the same locally, but a Kaggle kernel mounts the competition read-only at
+# /kaggle/input and only /kaggle/working is writable, so the two must be separable.
+DATA = os.environ.get("CASMI_DATA", f"{DIR}/data")
+WORK = os.environ.get("CASMI_WORK", DATA)
+SHARDS = f"{WORK}/index"     # one npz per row group: bounded memory, and resumable
 
 PEAKS = 64           # top-N most intense peaks kept per spectrum
 FLOOR = 0.005        # relative intensity floor, as a fraction of the base peak
@@ -128,7 +133,7 @@ def build():
     print(f"\n{SHARDS}/: {n_kept:,} spectra, peak RSS {rss_gb():.1f} GB")
 
 
-KEYS = f"{DATA}/key14.npz"
+KEYS = f"{WORK}/key14.npz"
 
 
 def load(canonical=True):

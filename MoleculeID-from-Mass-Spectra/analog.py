@@ -31,9 +31,10 @@ import library
 from metric import mrr
 from search import Searcher, spectra_of
 
+from library import DATA, WORK
+
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
-DESC = f"{DATA}/structures.npz"
+DESC = f"{WORK}/structures.npz"
 
 FP_BITS = 2048
 MASS_PPM = 5.0       # neutral-mass window; swept, with a clear optimum at 5
@@ -172,7 +173,7 @@ def rank(se, an, spectra, adducts, **kw):
 
 
 def evaluate():
-    sp = np.load(f"{DATA}/splits.npz", allow_pickle=True)
+    sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
     ix = library.load()
     se = Searcher(drop=sp["drop"], banned=sp["banned"])
     an = Analog(banned=sp["banned"])

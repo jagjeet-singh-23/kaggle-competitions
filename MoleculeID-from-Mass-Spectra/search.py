@@ -24,8 +24,9 @@ import numpy as np
 import library
 from metric import mrr, validate
 
+from library import DATA, WORK
+
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
 
 TOL_DA = 0.01        # peak matching tolerance; timsTOF is well inside this
 PPM = 10.0           # precursor window
@@ -133,7 +134,7 @@ def spectra_of(ix, rows):
 
 
 def evaluate():
-    sp = np.load(f"{DATA}/splits.npz", allow_pickle=True)
+    sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
     ix = library.load()
     se = Searcher(drop=sp["drop"], banned=sp["banned"])
 

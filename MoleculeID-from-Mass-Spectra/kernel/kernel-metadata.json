@@ -1,0 +1,13 @@
+{
+  "id": "jagjeetsingh23/casmi26-search-analog",
+  "title": "CASMI26 search + analog",
+  "code_file": "casmi_submit.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "competition_sources": ["enveda-CASMI26-molecule-id-mass-spectra"],
+  "dataset_sources": ["jagjeetsingh23/casmi26-molecule-id-code"],
+  "kernel_sources": []
+}

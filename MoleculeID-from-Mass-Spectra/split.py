@@ -27,10 +27,11 @@ import numpy as np
 
 from library import canonical_keys, rss_gb
 
+from library import WORK
+
 DIR = os.path.dirname(os.path.abspath(__file__))
-DATA = f"{DIR}/data"
-SHARDS = f"{DATA}/index"
-OUT = f"{DATA}/splits.npz"
+SHARDS = f"{WORK}/index"
+OUT = f"{WORK}/splits.npz"
 
 N_PER_CLASS = 200        # held-out structures per novelty class
 MAX_SPECTRA = 4          # queries per molecule; the real test has median 3

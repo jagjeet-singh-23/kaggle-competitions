@@ -22,3 +22,8 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .gstack/
+
+# Kernel code staging: copies of the modules, uploaded to Kaggle as a dataset so the
+# notebook imports one copy instead of pasting the source in. Regenerate with:
+#   cp metric.py library.py search.py analog.py kernel/code/
+MoleculeID-from-Mass-Spectra/kernel/code/
