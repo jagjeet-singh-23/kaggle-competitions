@@ -121,21 +121,64 @@ pass over the shards, and each configuration is then one 1,024 × 1,024 solve on
 `embed_train.py` writes a shard every 2,000 clips and resumes from what is on disk,
 which is what let the four-hour run survive two unrelated machine restarts.
 
-## 7. Where this stands and what is next
+## 7. Leaderboard, and where the 0.052 gap went
+
+Submitted as a kernel (this competition is kernels-only, so a CSV upload is never
+accepted):
+
+| | |
+|---|---|
+| public | 0.83593 |
+| **private** | **0.83575** |
+| local CV | 0.8881 |
+| top-20 floor | 0.95426 |
+
+Public and private differ by 0.00018 — the opposite of LANL, where the best public
+score had the worst private one. A large test set makes the ranking stable.
+
+The CV-to-leaderboard gap is not noise and not overfitting. It is 30 classes:
+
+| BirdNET column? | labelled positive? | classes | what they get |
+|---|---|---|---|
+| yes | yes | 28 | head + zero-shot blend |
+| yes | no | 129 | zero-shot only |
+| no | yes | 47 | head only |
+| **no** | **no** | **30** | **0.5 constant** |
+
+Local CV only ever averages the 75 classes with a labelled positive, so it never sees
+the 30 that fall through both routes. The leaderboard does. Their cost is arithmetic:
+
+```
+(204 x 0.885 + 30 x 0.50) / 234 = 0.8356      vs 0.83575 actual
+```
+
+That accounts for essentially the whole gap. And every one of those 30 classes —
+18 amphibians, 5 birds, 4 mammals, 3 insects — **has focal training audio available**.
+None of them is data-starved; they are simply not being trained.
+
+This is also the limit of the section 5 negative result. Focal audio hurt classes that
+already had soundscape data. For these 30 the alternative is a coin flip, so the same
+data can only help. Generalising "focal audio hurts" to them would be wrong.
+
+## 8. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
 under 90 minutes with no internet. BirdNET at 24 ms per 3-second chunk against the
 hidden test set is the thing that has to be measured before any of this is a score.
 
-Ranked by expected value:
+Ranked by expected value, with the arithmetic from section 7:
 
-1. **Build the submission kernel.** An unsubmitted 0.8881 is worth nothing, and the
-   90-minute budget is a real risk that no local number addresses.
-2. **Use the 1,478 labelled soundscape segments, not 739.** `embed_labelled.py`
-   currently keeps one label set per segment after de-duplication. This is the only
-   in-domain data that exists and the head is regularised to `C=0.01` precisely
-   because there is so little of it.
+1. **Train the 30 constant classes on focal audio.** They are 13% of the metric and
+   currently score 0.5 by default. Their focal embeddings are already extracted in
+   `data/emb_train/`, so this is a head-fitting change, not a data-collection one.
+   Moving them to 0.75 is worth +0.032; to 0.85, +0.045.
+2. **Pseudo-label the 10,592 unlabelled soundscape files.** `train_soundscapes/`
+   holds 10,658 recordings and only 66 are labelled. That is the largest in-domain
+   resource in the competition and it is completely unused. (An earlier version of
+   this list said to recover "1,478" labelled segments instead of 739 — that was
+   wrong. The shipped csv contains every row exactly twice, one row per
+   `(filename, start)`, so 739 is the true count and the de-duplication is correct.)
 3. **Energy-based window selection.** `starts_for()` spreads windows uniformly; 12% of
    clips run past a minute with the call anywhere in them. This is the most likely
    source of label noise in the focal set — and worth retrying section 5 after fixing,
@@ -143,7 +186,7 @@ Ranked by expected value:
 4. **Fine-tune BirdNET rather than freezing it.** Everything here is a linear probe.
    The domain gap in section 5 is exactly what fine-tuning addresses.
 
-## 8. Files
+## 9. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding

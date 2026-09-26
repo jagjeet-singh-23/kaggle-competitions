@@ -182,26 +182,61 @@ The 3-second search is the precursor-mass window: candidates come from a
 `searchsorted` over a sorted precursor array, so a query scores against a few hundred
 spectra rather than 1.9 million.
 
-## 7. What is next
+## 7. The leaderboard says class 1 is 13% of the problem, not 33%
+
+Submitted as a kernel (kernels-only competition). **Public LB 0.140.** Private is not
+revealed until the competition closes on 14 December 2026.
+
+The held-out split predicted 0.3365 by weighting the three classes equally. That
+weighting was flagged as an assumption, and the leaderboard says it was wrong.
+
+Our per-class numbers are known, so one leaderboard score constrains the test's class
+mix. With `LB = 0.9420·f1 + 0.0676·f2 + 0·f3`:
+
+| if class 2 is | then class 1 is | class 3 is |
+|---|---|---|
+| 0% | 14.9% | 85.1% |
+| 20% | 13.4% | 66.6% |
+| 33% | 12.5% | 54.5% |
+| 45% | 11.6% | 43.4% |
+
+**Class 1 is only 12–15% of the hidden test regardless of how the rest splits.** This
+is CASMI — a challenge about identifying unknowns — so a test set dominated by
+molecules with no spectra in any library is exactly what it should be. The equal-mix
+assumption was the naive reading.
+
+The consequence is blunt: **library search is worth at most 0.14 of this metric, and
+we are already getting nearly all of it.** Class 1 at 0.9420 cannot go much higher,
+and every additional point of it buys about 0.13 of a point on the leaderboard.
+
+For scale, the leader is at 0.425. Assuming they also solve class 1 at ~0.94, that is
+0.14 from class 1 and **0.285 from the other 85%** — an average near 0.335 on classes
+2 and 3, against our 0.0676 and 0.0000. They are not doing better retrieval; they are
+doing structure elucidation. That is the whole competition, and it is the thing this
+codebase does not yet do at all.
+
+## 8. What is next
 
 Ranked by expected value:
 
-1. **Predict fingerprints from the spectrum.** Analog propagation reaches class 2
-   only through a structure that already has spectra — it cannot score a candidate
-   whose neighbourhood the library never sampled. A model mapping spectrum to
-   fingerprint scores every candidate in the mass window directly, and 0.0676 against
-   a random-placement 0.033 says how much room is left.
+1. **Predict fingerprints from the spectrum.** This is no longer one option among
+   several — section 7 says classes 2 and 3 are ~87% of the metric and we score
+   0.0676 and 0.0000 on them. Analog propagation reaches class 2 only through a
+   structure that already has spectra, so it cannot score a candidate whose
+   neighbourhood the library never sampled. A spectrum-to-fingerprint model scores
+   every candidate in the mass window directly. Everything else on this list is worth
+   a fraction of what this is worth.
 2. **A reverse or hybrid cosine**, per section 4. The peak-count asymmetry is the
    clearest remaining mismatch between the data and the scoring function, and it caps
    class 1 as well as class 2.
-3. **Class 3 needs de novo generation** and nothing short of it. It is 33% of the
-   problem and structurally unreachable by retrieval — the assertion in `analog.py`
-   exists to keep that honest.
+3. **Class 3 needs de novo generation** and nothing short of it. It may be half the
+   hidden test (section 7) and is structurally unreachable by retrieval — the
+   assertion in `analog.py` exists to keep that honest.
 4. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
    an `[M+H]+` reference on equal terms.
 
-## 8. Files
+## 9. Files
 
 ```
 metric.py     MRR@25 exactly as scored; self-checks against the rules' examples
