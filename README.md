@@ -49,30 +49,39 @@ models.py     GBM / NuSVR / Ridge, log-target and blend wrappers         CV 2.03
 
 ---
 
-## [BirdCLEF+ 2026](BirdCLEF/) — analysed, not yet built
+## [BirdCLEF+ 2026](BirdCLEF/) — modelled locally, not yet submitted
 
 Identifying 234 species (birds, amphibians, mammals, reptiles, insects) from 5-second
 windows of passive acoustic monitoring in the Brazilian Pantanal. Closed June 2026.
 
+**[→ RESULTS.md](BirdCLEF/RESULTS.md)**
+
 | | |
 |---|---|
+| Best local CV | **0.8881** |
+| Zero-shot BirdNET | 0.6168 |
+| Competition winner | 0.96574 |
 | Metric | macro-averaged ROC-AUC, skipping classes with no true positives |
-| Winner | 0.96574 |
 | Constraint | **CPU notebook ≤ 90 minutes, GPU disabled, no internet** |
-| Data | 16.14 GB, 46,213 files |
 
-[GUIDE.md](BirdCLEF/GUIDE.md) has the metadata analysis. The finding that shapes the
-approach:
+The dataset fact that shapes everything: `taxonomy.csv` defines 234 classes,
+`train.csv` contains 206, and **28 classes have no focal training audio at all** — all
+25 insect sonotypes and 3 amphibians. 72 non-bird classes are 31% of a macro-averaged
+metric and share 750 focal clips, while 162 bird classes have 34,799.
 
-> `taxonomy.csv` defines 234 classes. `train.csv` contains 206. **28 classes have no
-> focal training audio at all** — all 25 insect sonotypes and 3 amphibians. Their
-> only training signal is 1,478 labelled soundscape segments across 66 files, 65% of
-> them from a single site.
+Two findings worth the click:
 
-The metric is macro-averaged, so those 28 classes are 12% of the score. Train only on
-`train_audio/` and you forfeit that 12% before starting. Widening: 72 non-bird classes
-are 31% of the metric and share 750 focal clips, while 162 bird classes have 34,799.
-Reptilia has exactly one clip in the entire dataset.
+- **BirdNET's embeddings are not bird-specific, its classifier is.** Zero-shot, the 72
+  non-bird classes score exactly 0.5000 — they have no output column. A linear probe
+  on the penultimate layer takes them to **0.8553**, close to what the same probe gets
+  on birds. That removes the need for the separate non-bird detector the analysis had
+  called for. Blending the logits back in helps only on the 28 bird columns; doing it
+  everywhere *costs* 0.066, because rank-averaging a constant is dilution.
+- **333 hours of focal audio made it worse.** Four hours of extraction, 131,943
+  segments, every configuration below the 0.8756 you get by ignoring it — and the
+  sweep is monotone toward discarding it. The loss is concentrated on birds
+  (0.9098 → 0.8021), which is the tell: the embeddings already encode focal bird
+  audio, so the extra rows contribute domain shift and little else.
 
 ---
 
@@ -107,11 +116,12 @@ redistributing them would breach the competition rules and dataset licences (LAN
 competition rules; BirdCLEF: CC BY-NC-SA 4.0; Enveda: CC BY-NC 4.0).
 
 ```bash
-./fetch_data.sh
+./fetch_data.sh              # all three
+./fetch_data.sh molecule     # or one: molecule | birdclef | lanl
 ```
 
-Requires the Kaggle CLI configured (`~/.kaggle/kaggle.json`) and each competition's
-rules accepted on kaggle.com first, or every request returns 403.
+Requires Kaggle credentials at `~/.kaggle/kaggle.json` and each competition's rules
+accepted on kaggle.com first, or every request returns 403.
 
 The script uses `curl -C -` rather than the Kaggle CLI: it resumes, and it streams to
 disk instead of buffering the whole file in memory. Kaggle serves large single files
@@ -120,7 +130,23 @@ expands when needed.
 
 ## Environment
 
-Python 3.10, no GPU. numpy, pandas, pyarrow, scikit-learn, lightgbm.
+Python 3.10, CPU only, no GPU anywhere. Full install, per-step RAM and wall-clock
+figures, and the two macOS caveats are in **[SETUP.md](SETUP.md)**.
 
-The LANL work runs entirely on a 15 GB laptop; reading its 9.1 GB CSV naively
-exhausts RAM, so `baseline.py` works from memory-mapped `.npy` caches built once.
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Runs on Linux and on macOS Apple Silicon. Intel Macs can run LANL and MoleculeID but
+not BirdCLEF — `ai-edge-litert` ships no Intel-Mac wheel.
+
+Everything is written to a 15 GB laptop's budget, because that is what it was built
+on. Reading LANL's 9.1 GB CSV naively exhausts RAM, so `baseline.py` works from
+memory-mapped `.npy` caches; loading Enveda's `train.parquet` whole peaks near 18 GB,
+so `library.py` streams it one row group at a time. `guard.sh` kills a runaway job
+before it takes the machine with it:
+
+```bash
+MIN_AVAIL_MB=2500 ./guard.sh python3 -u MoleculeID-from-Mass-Spectra/library.py
+```

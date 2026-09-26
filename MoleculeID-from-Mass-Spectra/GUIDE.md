@@ -244,6 +244,87 @@ pip install rdkit matchms
 
 ---
 
+## 3b. Jo maine build kiya (aur jo mila)
+
+### ⚠️ Visible test ke jawab train me hi hain — saare 400
+
+Maine test ke har spectrum ko train se match kiya `(round(precursor_mz,4), adduct, num_peaks)` pe:
+
+```
+1213 / 1213 spectra matched   (100%)
+400 / 400 molecules recovered
+381 unambiguous; baaki 19 peak-list compare karke resolve ho gaye
+→ saare 400 ek single consistent structure pe
+```
+
+`data/visible_test_answers.csv` me likh diya hai.
+
+Iske do matlab hain, aur dusra zyada important hai:
+
+1. Pipeline end-to-end validate kar sakte ho — asli jawab available hain.
+2. **Visible test poora Class 1 hai.** Har structure train me maujood hai. Toh koi bhi library search ispe ~1.0 MRR dega, aur wo number bilkul jhootha hai. Hidden test me Class 1/2/3 ka mix hoga.
+
+> Ispe local score dekhna wahi galti hai jo LANL me public LB dekhna thi. Mat dekhna.
+
+### Metric implement ho gaya — `metric.py`
+
+Rules ke apne examples pe verify kiya: glucose ke dono spellings `WQZGKKKJIJFFOK` pe aate hain, rank-2 hit 0.5 deta hai, rank-26 hit 0 deta hai, invalid SMILES crash nahi karti, aur keto/enol tautomers collide karte hain.
+
+RDKit **2026.03.3** pinned version install hai — wahi jo rules me likha hai. `key14()` 1.1 ms per SMILES leta hai (uncached), toh 400 × 25 = 10,000 candidates ~11 second me score ho jaate hain. `lru_cache` laga hai kyunki common scaffolds baar-baar aate hain.
+
+### Spectral index — `library.py`
+
+```
+2,539,608 spectra  →  1,888,517 after filters  (265,875 structures)
+disk: 1.3 GB, load: 1.8s / 1.84 GB
+```
+
+Filters: `precursor_mz ∈ [150,1250]`, test ke 10 adducts, `|precursor_error_ppm| ≤ 10`, ≥3 peaks.
+Har spectrum se top-64 peaks, precursor+2 se upar wale hata ke, 0.5% intensity floor, `sqrt` intensity.
+
+> ### Memory: is file ne meri machine do baar freeze ki
+>
+> `pd.read_parquet()` poori file pe, peak-list columns ke saath = **~18 GB peak**. Wajah: pandas har spectrum ke do variable-length arrays ko alag numpy objects banata hai — 5 million objects. Machine 15 GB + 2 GB swap ki hai, toh Linux clean OOM-kill nahi karta, swap thrash karke lock ho jaata hai.
+>
+> Maine chaar tarike naape:
+>
+> | approach | peak RSS | time |
+> |---|---|---|
+> | `pd.read_parquet` (poori file) | **~18 GB** | freeze |
+> | polars, full `collect` | 9.84 GB | **7.5s** |
+> | polars, batched `slice` | 11.21 GB | 211s |
+> | pyarrow row-group loop | **4.9 GB** | ~6 min |
+>
+> Polars I/O pe 50x fast hai par memory usse theek nahi hoti — `slice()` lazy scan pe har baar shuru se re-scan karta hai. Do aur gotchas: `to_pylist()` 20M doubles ko Python float objects me box kar deta hai (4.3 → 1.5 GB fix, Arrow ke flat buffers use karo), aur `explode()` har peak ke liye **baaki saare columns duplicate** karta hai — 300-byte `smiles` × 158 peaks se memory turant khatam.
+>
+> Jo chala: row-group streaming + Arrow flat buffers + per-row-group shards + fixed-width byte strings.
+
+### CV split — `split.py`
+
+Teen novelty classes simulate karte hain, `inchikey14` pe group karke (spectrum pe kabhi nahi — ek hi molecule ke chaar collision energies me se teen index me aur ek query me daalna Class 1 ko Class 3 ka label pehna dena hai).
+
+```
+class 1  structure >=2 libraries me hai. Ek library ke spectra query, baaki index me.
+class 2  saare spectra hold out, par structure candidate list me rehta hai.
+class 3  saare spectra hold out AUR structure candidate list se bhi hata diya.
+```
+
+Result:
+
+```
+class 1: 200 molecules,  618 query spectra (3.1 per molecule)
+class 2: 200 molecules,  696 query spectra (3.5 per molecule)
+class 3: 200 molecules,  681 query spectra (3.4 per molecule)
+index rows removed: 3,120 of 1,888,517
+peak RSS 0.19 GB
+```
+
+3.1–3.5 spectra per molecule real test ke median 3 se match karta hai.
+
+**Ek constraint jo class-1 proxy ko limit karti hai:** 265,875 structures me se sirf **24,893 (9.4%)** ek se zyada library me hain. Yaani class-1 simulate karne ke liye pool chhota hai, aur agar tum 200 se zyada chahiye to wahi 24,893 me se lene padenge.
+
+Spectra per structure: median **4**, max **1067**.
+
 ## 4. Approach ladder — sabse sasta pehle
 
 ### Rung 0 — Sanity submission (1 ghanta)

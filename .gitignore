@@ -14,6 +14,10 @@ submission.csv
 kaggle.json
 .env
 
+# Pretrained weights: BirdNET V2.4 (MIT, kahst/BirdNET-Analyzer). 214 MB.
+# See BirdCLEF/GUIDE.md for the download URL.
+models/
+
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

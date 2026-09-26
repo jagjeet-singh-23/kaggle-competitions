@@ -1,0 +1,23 @@
+# Versions this repo was developed and measured against (Linux, Python 3.10).
+# All of these publish macOS arm64 wheels, so `pip install -r requirements.txt`
+# works unchanged on Apple Silicon. See SETUP.md for the two macOS caveats.
+
+numpy==2.2.6
+pandas==2.3.2
+scipy==1.15.3
+scikit-learn==1.7.2
+pyarrow==21.0.0
+
+# LANL only. Ships its own libomp in the macOS wheel; no brew install needed.
+lightgbm==4.7.0
+
+# BirdCLEF only. ai-edge-litert has NO Intel-Mac wheel -- Apple Silicon or Linux.
+soundfile==0.14.0
+ai-edge-litert==2.2.0
+
+# MoleculeID only. Pinned exactly: the competition metric is an InChIKey comparison
+# after tautomer canonicalisation, and that is RDKit-version-dependent. A different
+# version can score the same prediction differently.
+rdkit==2026.3.3
+
+kaggle==1.7.4.5

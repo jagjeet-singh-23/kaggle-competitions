@@ -40,7 +40,65 @@ BC2026_Test_0001_S05_20250227_010002_5,0.01,0.9,...
 - Free + publicly available external data allowed, **including pre-trained models**
 - Output `submission.csv`
 
-Yaani: ~600 files × 1 min audio = 10 hours of audio, 7200 windows, 234 classes, **90 CPU minutes me**. Model loading + audio decode me hi ~5 min jaayenge (host khud bolte hain). Yahi comp ka defining constraint hai — accuracy nahi, accuracy-per-CPU-second.
+Yaani: ~600 files × 1 min audio = 10 hours of audio, 7,200 windows, 234 classes, **90 CPU minutes me**.
+
+### Budget: maine Kaggle pe chala ke naapa (Rung 0)
+
+Pehle maine socha tha ki yahi comp ka defining constraint hai. **Galat tha.** `kernel/rung0.py` ne actual Kaggle CPU pe naapa:
+
+```
+decode :  94.4 ms/file      (mere laptop pe 28 ms — Kaggle CPU ~3.4x dheema)
+mel    : 242.2 ms/file      (laptop 56 ms — ~4.3x dheema)
+
+600 files ke liye projected: decode + mel = 3.4 min of 90
+bacha: 86.6 min for 7,200 windows  ->  722 ms per window
+```
+
+**722 ms per window** bahut zyada hai. CPU pe `efficientnet_b0` ka ek forward pass ~30–60 ms leta hai. Yaani 10+ model ka ensemble aaram se fit ho jaayega.
+
+Host bolte hain test soundscapes load hone me ~5 min lagte hain (mera 60-file sample `train_soundscapes` se tha aur shayad cached tha), toh realistic overhead 5–10 min maano. Phir bhi **~80 min inference ke liye bachte hain.**
+
+Nateeja: budget ko constraint maan ke chhota model mat chuno. Accuracy pe focus karo, speed apne aap fit ho jaayegi.
+
+### Submission notebook-only hai — LANL se bada fark
+
+`kaggle competitions submit -f submission.csv` **kaam nahi karega**. Code competition hai: notebook Kaggle pe chalna chahiye aur wahin se submit hota hai.
+
+Workflow:
+
+```bash
+cd kernel
+kaggle kernels push -p .                                    # notebook chadhao + run karo
+kaggle kernels status jagjeetsingh23/birdclef-2026-rung0    # wait
+kaggle kernels output jagjeetsingh23/birdclef-2026-rung0 -p out   # log + submission.csv
+```
+
+Aakhri "Submit to competition" wala step **UI se hi hota hai** — notebook page pe Output tab → Submit.
+
+#### ⚠️ Gotcha: mount path push method pe depend karta hai
+
+```
+UI me banaya notebook :  /kaggle/input/birdclef-2026
+API se push kiya      :  /kaggle/input/competitions/birdclef-2026
+```
+
+Isi pe mera pehla run fail hua. Runtime pe resolve karo:
+
+```python
+COMP = next(p for p in ("/kaggle/input/birdclef-2026",
+                        "/kaggle/input/competitions/birdclef-2026")
+            if os.path.exists(f"{p}/taxonomy.csv"))
+```
+
+#### `sample_submission.csv` sirf 3 rows ka hai
+
+Wo format example hai, poora grid nahi — ek hi test file ke pehle 3 windows. Apne row_ids test files se khud banao:
+
+```
+row_id = f"{filename_without_ogg}_{end_second}"     # end_second = 5, 10, ... 60
+```
+
+Rerun me `test_soundscapes/` populate hoti hai; uske bahar wo khaali hai (sirf `readme.txt`), isliye code ko dono case handle karne padenge.
 
 ---
 
@@ -123,25 +181,111 @@ Wo 28:
 
 Achhi khabar: **saare 28 `train_soundscapes_labels.csv` me covered hain.** Zero classes aise nahi hain jinka koi training signal na ho.
 
-Buri khabar: macro AUC me ye **28/234 = 12% of the metric** hai, aur inka poora training signal sirf **1,478 labelled soundscape segments** hai.
+Buri khabar: macro AUC me ye **28/234 = 12% of the metric** hai, aur inka poora training signal sirf **972 labelled 5s segments** hai — kul milakar 81 minute audio, aur ek class (`47158son05`) ke paas sirf **15 second**.
 
 Iska seedha matlab: `train_soundscapes_labels.csv` optional side-data nahi hai. Agar tumne sirf `train_audio` pe train kiya, to tumhara model 28 classes ke liye random guess karega aur tum **12% metric upfront chhod rahe ho**. Ye akela hi 0.95 aur 0.96 ka fark hai.
 
 ### `train_soundscapes_labels.csv` ki reality
 
-```
-66 labelled files, 1,478 segments, 75 distinct classes (234 me se)
-segments per class:  median 26, min 2, max 666
-11 classes ke paas <5 labelled segments
-```
+> ⚠️ **File me har row do baar hai.** 1,478 rows me se **739 exact duplicates** hain.
+> Dedup zaroor karo, warna tumhara sample weighting aur CV dono galat honge.
 
-Sites bhi skewed hain — `S22` akela 954 segments (65%), baaki 8 sites me 38–120 each:
+Dedup ke baad:
 
 ```
-S22 954 | S08 120 | S15 96 | S19 72 | S23 72 | S13 48 | S03 48 | S09 38 | S18 30
+739 segments, 66 files  =  1.0 ghanta labelled audio (poora)
+75 distinct classes (234 me se)
+segments per class: median 13, min 1, max 333
+16 classes ke paas <5 segments, 25 ke paas <10
+species per 5s segment: mean 4.22, median 4, max 10
 ```
 
-Yaani in-domain data hai hi bahut kam, aur ek site pe concentrated hai. Isliye **unlabeled `train_soundscapes` pe pseudo-labelling optional nahi, zaroori hai** — labelled portion akele se train nahi hoga.
+**4.22 species per segment** — ye focal recordings se bilkul ulta hai. Test soundscapes dense multi-label hain; ek model jo "ek clip = ek species" maan ke train hua hai, wo yahan galat prior ke saath aayega.
+
+### Wo 28 zero-focal classes — unka poora training data
+
+Ye literally itna hi hai (deduped 5s segments):
+
+```
+47158son05    3      <- 15 seconds of audio, total
+47158son12    5      47158son19    5      47158son09    6
+47158son02    7      47158son15   12      25073        12
+47158son16   12      47158son20   12      47158son18   12
+47158son14   12      47158son04   17      47158son08   17
+47158son06   18      47158son21   22      47158son01   23
+47158son22   24      47158son23   24      47158son24   24
+47158son03   33      47158son10   33      47158son13   36
+47158son11   36      47158son17   43      47158son07   48
+1491113      79      47158son25   84      517063      313
+```
+
+28 classes, **972 segments total**, aur ye 12% of the metric hain. `47158son05` ke paas 15 second hai. Ye supervised learning nahi, **few-shot** hai.
+
+### 177 ghante unlabelled in-domain audio
+
+Yahi sabse bada asset hai jo abhi chhua nahi gaya:
+
+```
+train_soundscapes: 10,658 files, har ek EXACTLY 60s, 32 kHz  = 178 hours
+labelled:              66 files (0.6%)                       =   1 hour
+UNLABELLED:        10,592 files                              = 177 hours
+```
+
+Format test ke bilkul same hai. **Pseudo-labelling optional nahi hai** — 1 ghante labelled audio se 234 classes nahi seekhenge, par 177 ghante in-domain audio available hai.
+
+### Sites: 23 total, 14 me ek bhi label nahi
+
+| site | files | labelled |
+|---|---|---|
+| S22 | 3,383 | 40 |
+| **S02** | **2,505** | **0** |
+| **S01** | **2,341** | **0** |
+| S13 | 1,873 | 2 |
+| S19 | 76 | 3 |
+| S18 | 54 | 2 |
+| S15 | 43 | 4 |
+| baaki 16 sites | <55 each | 0–4 |
+
+Char sites (S22, S02, S01, S13) me 10,102 files hain — poore dataset ka 95%. Aur **S01 + S02 me 4,846 files hain jinpe ek bhi label nahi**. Wahi pseudo-labelling ka sabse bada target hai.
+
+Labelled sites: `S03 S08 S09 S13 S15 S18 S19 S22 S23`.
+
+### Recording ka time: dawn chorus hai hi nahi
+
+Pantanal UTC-4 hai. Local hour distribution:
+
+```
+14:00  1071 |  18:00  1049 |  22:00  1031
+15:00  1024 |  19:00  1058 |  23:00   996
+16:00  1009 |  20:00   780 |  00:00   266
+17:00  1068 |  21:00  1117 |  02:00    95
+                             baaki hours: <60 each
+```
+
+**Recordings lagbhag poori tarah 14:00–23:00 local hain.** 05:00–09:00 — yaani dawn chorus, jab birds sabse zyada bolte hain — dataset me practically hai hi nahi.
+
+Data page ka apna test example isse match karta hai: `BC2026_Test_0001_S05_20250227_010002` = 01:00 UTC = **21:00 local**.
+
+Iske do bade nateeje:
+
+1. **Test afternoon/evening/night ka hai.** Nocturnal species, amphibians aur insects proportionally zyada important hain. Ye explain karta hai ki 28 insect/amphibian classes itni matter kyun karti hain.
+2. **Time-of-day prior ka fayda kam hai** jitna maine pehle socha tha — sab recordings lagbhag ek hi time band se hain, toh usme discriminative power kam hai. Site prior zyada useful hai.
+
+Date range: **2014-01-07 se 2025-11-29** — 11 saal.
+
+### `train_audio` clip durations (3,000 clips ka sample)
+
+```
+sab 32 kHz (confirmed)
+duration: median 20.9s  mean 33.7s  max 1654s (27 min!)
+  10%   5.7s      75%   39.4s
+  25%  10.9s      90%   68.9s
+                  99%  187.1s
+clips <5s: 8.3%   <10s: 22.9%   >60s: 12.1%
+total train_audio: ~333 hours
+```
+
+8.3% clips 5 second se chhoti hain — un pe padding chahiye. 12% clips 60s+ hain, aur unme se ek random 5s crop lene pe zyadatar chance hai ki us crop me bird bol hi nahi raha. **Random crop naive tarike se mat karo** — energy-based crop selection ya multi-crop averaging chahiye.
 
 ### `train.csv` ke aur numbers
 
@@ -182,7 +326,135 @@ Metadata wali EDA Section 2b me ho chuki. Audio milne pe ye:
 
 Sab cells me 0.5. AUC = 0.5. Format verify karo, 90-min budget me notebook ka skeleton (audio load → dummy predict → write csv) chala ke dekho. Audio decode ka cost measure karo — yahi tumhara budget ka bada hissa hai.
 
-### Rung 1 — Pretrained embeddings + light head ← **yahan se shuru karo**
+### Rung 1a — Zero-training BirdNET ✅ done, macro AUC 0.6168
+
+BirdNET V2.4 ko frozen feature extractor ki tarah laga diya. Model MIT licensed hai:
+
+```
+https://tuc.cloud/index.php/s/886x39f5N3sdsAM/download/V2.4.zip     # 214 MB
+```
+
+(Ye URL `birdnet_analyzer` wheel ke `model.py` me hai — repo me weights nahi hain.)
+
+**Model ke facts jo maine verify kiye:**
+
+```
+input   : (batch, 144000) float32  = 3.0 s @ 48 kHz
+output  : (batch, 6522)   species logits        tensor index 546
+embedding: (batch, 1024)  GLOBAL_AVG_POOL/Mean  tensor index 545
+```
+
+Embedding lene ke liye `experimental_preserve_all_tensors=True` chahiye — TFLite intermediate tensors phenk deta hai. Cost ~25% (24 ms vs 18 ms per chunk).
+
+Throughput (mera laptop, 4 threads): **24 ms per 3s chunk = 124x realtime.**
+Yaani poora dataset (511 ghante audio) ~4 ghante me process ho jaayega. Kaggle CPU ~3.5x dheema hai, toh 600 test files ka inference ~20 min — 90 min budget me aaram se.
+
+#### Species mapping: 157 of 162 birds free me mil jaate hain
+
+`taxonomy.csv` ke `scientific_name` ko BirdNET ke labels se match kiya:
+
+| taxon | classes | BirdNET me | |
+|---|---|---|---|
+| Aves | 162 | **157** | 97% |
+| Amphibia | 35 | 0 | |
+| Insecta | 28 | 0 | |
+| Mammalia | 8 | 0 | |
+| Reptilia | 1 | 0 | |
+
+**157/234 = 67% classes ka prediction bina kuch train kiye mil jaata hai.** Baaki 77 sab non-bird hain — BirdNET ne inhe kabhi suna hi nahi.
+
+#### Result (739 labelled segments, 75 scored classes)
+
+```
+zero-shot BirdNET, macro AUC:  0.6168
+
+  mapped to BirdNET   (28 classes): 0.8128
+  not in BirdNET      (47 classes): 0.5000   <- constant, by construction
+```
+
+**Jo birds BirdNET jaanta hai, un pe 0.8128 — bina ek bhi training step ke.**
+
+Per-class dekho:
+
+```
+1.000  Great Kiskadee               n= 2
+1.000  Hyacinth Macaw               n=10
+0.994  Turquoise-fronted Amazon     n=14
+...
+0.545  Nacunda Nighthawk            n=11
+0.515  Red Junglefowl               n=12
+0.062  Buff-necked Ibis             n= 2    <- n=2, noise
+```
+
+> Ye 0.6168 leaderboard se **direct comparable nahi** hai. Locally sirf 75 classes score hoti hain aur unme se sirf 28 birds hain, jabki poore test me 162/234 birds hain. Agar LB pe bhi birds 0.81 aur non-birds 0.5 rahe, to zero-shot roughly **0.67 × 0.81 + 0.33 × 0.50 ≈ 0.71** hoga. Local number sirf apne models ko aapas me compare karne ke liye hai.
+
+Context: winner 0.96574 pe tha. Toh 0.71 se 0.96 tak ka safar baaki hai — par 30 second ke kaam me half-decent baseline khada ho gaya.
+
+#### Code
+
+```
+birdnet.py           model wrapper: 32k->48k resample, 3s chunking, logits+embeddings
+embed_labelled.py    739 labelled segments -> data/labelled.npz   (50 seconds)
+cv.py                exact metric (macro AUC, skip empty classes) + zero-shot baseline
+```
+
+Ek detail jo matter karti hai: 5s window 48 kHz pe 240,000 samples ka hai, aur BirdNET chunk 144,000 ka. Ek chunk se poori window cover nahi hoti. **Do overlapping chunks** (0–3s aur 2–5s) leta hoon, 1 second overlap ke saath — isse seam pe koi call kat na jaaye. Logits pe `max` (call dono me se kisi ek me bhi ho to present hai), embeddings pe `mean`.
+
+### Rung 1b — Embeddings pe head ✅ 0.6168 → 0.8881
+
+`head.py`. Sirf **739 labelled in-domain segments** pe, GroupKFold by soundscape file (ek recording ke segments background, mausam aur aksar wahi individuals share karte hain — file ke andar split karna leak hai). Per class one-vs-rest logistic regression, `C=0.01` — 1,024 dimensions vs ~590 training rows per fold.
+
+`train_audio` ke embeddings abhi extract ho rahe hain, toh ye **imaandar floor** hai: sirf in-domain data se ek head kitna kar sakta hai.
+
+```
+model                                all   birds  others
+zero-shot BirdNET                 0.6168  0.8128  0.5000
+head on embeddings                0.8756  0.9098  0.8553
+head on emb+logits                0.8774  0.9078  0.8593
+head + zero-shot                  0.8100  0.9188  0.7451
+head + zero-shot (birds only)     0.8881  0.9156  0.8717   <- best
+```
+
+#### Sabse important finding: embeddings non-birds ke liye bhi kaam karti hain
+
+**0.5000 → 0.8553.** BirdNET ne kabhi ek bhi frog, cicada ya jaguar pe train nahi kiya — uska label set 6,522 **birds** ka hai. Phir bhi uski 1024-dim embedding pe ek linear head un 47 non-bird classes ko 0.86 tak pahuncha deta hai.
+
+Matlab wo embedding bird-specific classifier nahi, ek **general bioacoustic representation** hai. Ye is competition ka poora non-bird hissa (31% of the metric) unlock kar deta hai, aur ye baat BirdNET ke docs me kahin nahi likhi.
+
+#### Blend sirf birds pe lagao
+
+Naive rank-blend (`head + zero-shot`) overall **bigaad** deta hai: 0.8774 → 0.8100. Wajah saaf hai — zero-shot non-birds pe constant 0.5 hai, toh use blend karna un 47 classes ko 0.8593 se 0.7451 pe girata hai.
+
+Blend sirf un 157 classes pe lagao jo BirdNET jaanta hai:
+
+```python
+sel[:, hit] = 0.5 * sel[:, hit] + 0.5 * rank(Z)[:, hit]
+```
+
+Birds 0.9078 → 0.9156, others 0.8593 → 0.8717 (rank normalisation se), overall **0.8881**.
+
+#### Jo abhi baaki hai
+
+- Locally sirf **75 of 234** classes score hoti hain. Baaki 159 ke liye labelled soundscapes me ek bhi positive nahi hai — unke liye head train hi nahi ho sakta. Wo `train_audio` se aayengi (extraction chal rahi hai, ~4.7 ghante).
+- 0.8881 LB se comparable nahi hai (75 classes vs 234, aur local mix me non-birds over-represented hain).
+- Winner 0.96574 pe tha.
+
+### Rung 1c — train_audio embeddings (running)
+
+```
+18 shards x 2,000 clips,  ~16.5 min per shard,  ETA ~4.7 h
+shard 0: 7,828 windows  ->  poora ~139k windows
+```
+
+Per clip max 6 windows of 5s, evenly spread. Median clip 20.9s hai toh zyadatar poori cover ho rahi hai.
+
+**Shortcut jo maine liya:** windows uniformly spaced hain, energy ke hisaab se nahi. 12% clips 60s+ ki hain aur unme bird kahin bhi ho sakta hai — loudest-window selection isse behtar karegi. Ye pehla obvious improvement hai.
+
+Asli design sawaal jo Rung 1c me aayega: **333 ghante focal audio (saaf, galat domain) aur 1 ghanta soundscape (sahi domain, bahut kam) ko kaise combine karein.** Pehle sabse simple version — dono pe train, soundscape samples pe zyada weight.
+
+### Rung 1 ka original plan (reference)
+
+### Rung 1 ka original plan (reference)
 
 CPU-only constraint ka seedha jawab: koi bhi bhaari model train mat karo, pehle se maujood bird-audio foundation model ko frozen feature extractor ki tarah use karo.
 

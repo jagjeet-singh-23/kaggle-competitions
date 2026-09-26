@@ -1,0 +1,14 @@
+{
+  "id": "jagjeetsingh23/birdclef-2026-rung0",
+  "title": "birdclef-2026-rung0",
+  "code_file": "rung0.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "competition_sources": ["birdclef-2026"],
+  "dataset_sources": [],
+  "kernel_sources": []
+}
