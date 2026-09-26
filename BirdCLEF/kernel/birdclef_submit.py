@@ -94,25 +94,83 @@ for i, lbl in enumerate(rows):
             Y[i, col[s]] = 1.0
 step(f"labelled: {Etr.shape} emb, {int((Y.sum(0) > 0).sum())} classes with positives")
 
+hit = species_map(tax) >= 0          # a property of the taxonomy, not of any audio
+has_pos = Y.sum(0) > 0
+
 Xtr = np.hstack([Etr, Ltr[:, keep]])
 sc = StandardScaler().fit(Xtr)
 Xtr = sc.transform(Xtr)
-has_pos = Y.sum(0) > 0
 models = {}
 for j in np.where(has_pos)[0]:
     models[j] = LogisticRegression(C=0.01, max_iter=2000,
                                    class_weight="balanced").fit(Xtr, Y[:, j])
-step(f"fitted {len(models)} heads")
+step(f"fitted {len(models)} soundscape heads")
 
-# ---- test ------------------------------------------------------------------------
+# ---- cold-start heads for the classes with neither route --------------------------
+# 30 classes have no BirdNET column and no labelled positive, so they would emit a
+# 0.5 constant. That is 13% of a macro-averaged metric and accounted for essentially
+# the whole 0.8881 -> 0.83575 gap on the first submission. All of them do have focal
+# audio, and a focal-only head scores 0.7385 against 0.5 on a scoreable proxy cohort
+# of the same shape (coldstart.py). 30 segments per class beat 150 and 400.
+#
+# Deliberately NOT applied to the 129 classes that fall back to zero-shot: measured
+# on the mapped-and-labelled cohort, zero-shot is 0.8128 against a focal head's
+# 0.7809, and a 50/50 blend gains nothing. Changing them would be a regression.
+fc = np.load(f"{ASSETS}/focal_cap30.npz")
+Xf, yf = fc["emb"].astype(np.float32), fc["label"]
+scf = StandardScaler().fit(Xf)       # focal heads are embedding-only, so their own
+Xf_s = scf.transform(Xf)
+cold_models = {}
+for j in range(len(classes)):
+    if not has_pos[j] and not hit[j] and (yf == j).sum() > 0:
+        cold_models[j] = LogisticRegression(
+            C=0.01, max_iter=2000,
+            class_weight="balanced").fit(Xf_s, (yf == j).astype(int))
+step(f"fitted {len(cold_models)} cold-start heads on focal audio")
+
+sources = {"head": 0, "zero-shot": 0, "cold-start": 0, "constant": 0}
+for j in range(len(classes)):
+    sources["head" if j in models else "zero-shot" if hit[j]
+            else "cold-start" if j in cold_models else "constant"] += 1
+step("prediction sources: " + ", ".join(f"{k} {v}" for k, v in sources.items()))
+assert sources["constant"] == 0, f"{sources['constant']} classes would emit 0.5"
+
+rank = lambda v: np.argsort(np.argsort(v)) / max(1, len(v) - 1)
+
+
+def predict(L, E):
+    """(logits, embeddings) -> (n, 234) scores. Every class gets a real prediction."""
+    Z, _ = zero_shot(L, tax)
+    Xh = sc.transform(np.hstack([E, L[:, keep]]))
+    Xc = scf.transform(E)
+    P = np.full((len(E), len(classes)), 0.5)
+    for j in range(len(classes)):
+        if j in models:
+            p = rank(models[j].predict_proba(Xh)[:, 1])
+            # Blend zero-shot only where BirdNET has an output column for the
+            # species; elsewhere its logits are constant and blending is dilution.
+            P[:, j] = 0.5 * p + 0.5 * rank(Z[:, j]) if hit[j] else p
+        elif hit[j]:
+            P[:, j] = rank(Z[:, j])
+        elif j in cold_models:
+            P[:, j] = rank(cold_models[j].predict_proba(Xc)[:, 1])
+    return P
+
+
+# ---- test -------------------------------------------------------------------------
 test_dir = f"{COMP}/test_soundscapes"
 files = sorted(f for f in os.listdir(test_dir) if f.endswith((".ogg", ".wav", ".flac")))
 step(f"{len(files)} test soundscapes")
 
 if not files:
     # The public copy of test_soundscapes holds only a readme; the real files appear
-    # when the notebook is rerun against the hidden set. Emit the sample so the
-    # submission is still valid and the rerun is what actually scores.
+    # when Kaggle reruns this against the hidden set. Exercise predict() on the
+    # labelled embeddings anyway -- otherwise the scored rerun would be the first
+    # time this code path ever ran, which is how a submission gets wasted.
+    P = predict(Ltr, Etr)
+    assert P.shape == (len(Etr), len(classes)) and np.isfinite(P).all()
+    assert not np.allclose(P.std(axis=0), 0), "every column constant"
+    step(f"smoke test on {len(Etr)} labelled segments passed: {P.shape}")
     sub = pd.read_csv(f"{COMP}/sample_submission.csv")
     sub.to_csv("/kaggle/working/submission.csv", index=False)
     step(f"no test audio; wrote sample_submission ({len(sub)} rows)")
@@ -136,52 +194,7 @@ for n, fn in enumerate(files):
 Lte, Ete = np.concatenate(Lte), np.concatenate(Ete)
 step(f"embedded {len(row_ids):,} windows")
 
-Z, hit = zero_shot(Lte, tax)
-Xte = sc.transform(np.hstack([Ete, Lte[:, keep]]))
-
-# ---- cold-start heads for the classes with neither route ------------------------
-# 30 classes have no BirdNET column and no labelled positive, so they would emit a
-# 0.5 constant. That is 13% of a macro-averaged metric and accounted for essentially
-# the whole 0.8881 -> 0.83575 gap on the first submission. All of them do have focal
-# audio, and a focal-only head scores 0.7385 against 0.5 on a scoreable proxy cohort
-# of the same shape (coldstart.py). 30 segments per class beat 150 and 400.
-#
-# This is deliberately NOT applied to the 129 classes that fall back to zero-shot:
-# measured on the mapped-and-labelled cohort, zero-shot is 0.8128 against a focal
-# head's 0.7809, and blending the two gains nothing.
-fc = np.load(f"{ASSETS}/focal_cap30.npz")
-Xf, yf = fc["emb"].astype(np.float32), fc["label"]
-scf = StandardScaler().fit(Xf)          # focal heads are embedding-only, so their own
-Xf_s, Xte_f = scf.transform(Xf), scf.transform(Ete)
-cold = [j for j in range(len(classes))
-        if not has_pos[j] and not hit[j] and (yf == j).sum() > 0]
-cold_models = {}
-for j in cold:
-    cold_models[j] = LogisticRegression(C=0.01, max_iter=2000,
-                                        class_weight="balanced").fit(Xf_s, (yf == j).astype(int))
-step(f"fitted {len(cold_models)} cold-start heads on focal audio")
-
-rank = lambda v: np.argsort(np.argsort(v)) / max(1, len(v) - 1)
-P = np.full((len(row_ids), len(classes)), 0.5)
-sources = {"head": 0, "zero-shot": 0, "cold-start": 0, "constant": 0}
-for j in range(len(classes)):
-    sources["head" if j in models else
-            "zero-shot" if hit[j] else
-            "cold-start" if j in cold_models else "constant"] += 1
-    if j in models:
-        p = rank(models[j].predict_proba(Xte)[:, 1])
-        # Blend zero-shot only where BirdNET actually has an output column for the
-        # species; elsewhere its logits are a constant and blending is pure dilution.
-        P[:, j] = 0.5 * p + 0.5 * rank(Z[:, j]) if hit[j] else p
-    elif hit[j]:
-        # No labelled positive to train on, but BirdNET knows this species: its
-        # zero-shot logits beat the constant a head would otherwise emit.
-        P[:, j] = rank(Z[:, j])
-    elif j in cold_models:
-        P[:, j] = rank(cold_models[j].predict_proba(Xte_f)[:, 1])
-step("predicted by source: " + ", ".join(f"{k} {v}" for k, v in sources.items()))
-assert sources["constant"] == 0, f"{sources['constant']} classes still emit 0.5"
-
+P = predict(Lte, Ete)
 sub = pd.DataFrame(P, columns=classes)
 sub.insert(0, "row_id", row_ids)
 sub.to_csv("/kaggle/working/submission.csv", index=False)
