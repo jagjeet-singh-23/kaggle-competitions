@@ -49,7 +49,7 @@ models.py     GBM / NuSVR / Ridge, log-target and blend wrappers         CV 2.03
 
 ---
 
-## [BirdCLEF+ 2026](BirdCLEF/) — submitted, 0.83575
+## [BirdCLEF+ 2026](BirdCLEF/) — submitted, 0.85710
 
 Identifying 234 species (birds, amphibians, mammals, reptiles, insects) from 5-second
 windows of passive acoustic monitoring in the Brazilian Pantanal. Closed June 2026.
@@ -58,7 +58,8 @@ windows of passive acoustic monitoring in the Brazilian Pantanal. Closed June 20
 
 | | |
 |---|---|
-| Private LB | **0.83575** |
+| Private LB | **0.85710** |
+| First submission | 0.83575 |
 | Local CV (75 of 234 classes) | 0.8881 |
 | Zero-shot BirdNET | 0.6168 |
 | Competition winner | 0.96574 |

@@ -133,6 +133,8 @@ accepted):
 | local CV | 0.8881 |
 | top-20 floor | 0.95426 |
 
+(Section 8 improves this to 0.85710 private / 0.86983 public.)
+
 Public and private differ by 0.00018 — the opposite of LANL, where the best public
 score had the worst private one. A large test set makes the ranking stable.
 
@@ -160,7 +162,55 @@ This is also the limit of the section 5 negative result. Focal audio hurt classe
 already had soundscape data. For these 30 the alternative is a coin flip, so the same
 data can only help. Generalising "focal audio hurts" to them would be wrong.
 
-## 8. Where this stands and what is next
+## 8. Rung 2: cold-start heads, and how well the proxy predicted them
+
+The 30 classes from section 7 now get a head fitted on focal audio instead of a
+constant. They cannot be validated directly — having no labelled positive is the
+definition of the cohort — so `coldstart.py` measures a proxy: the 19 classes that
+are *also* absent from BirdNET and *also* have focal audio, but do have labels. Their
+labels are used only to score, never to fit.
+
+| focal segments/class | rows | mean AUC on the 19 | above 0.5 | above 0.7 |
+|---|---|---|---|---|
+| **30** | 6,271 | **0.7385** | 18/19 | 15/19 |
+| 150 | 28,237 | 0.7175 | 17/19 | 11/19 |
+| 400 | 64,970 | 0.7202 | 18/19 | 10/19 |
+
+30 segments per class beats 150 and 400, matching Rung 1c: more focal audio does not
+help anywhere it has been tried.
+
+**Submitted result:**
+
+| | public | private |
+|---|---|---|
+| v1 | 0.83593 | 0.83575 |
+| v3, with cold-start heads | **0.86983** | **0.85710** |
+| gain | +0.03390 | +0.02135 |
+| predicted from the proxy | +0.0306 | +0.0306 |
+
+The gain is real and is the largest single improvement so far. The proxy was accurate
+on public (+0.0339 against +0.0306) and **over-predicted private by about 30%**.
+Inverting `gain = 30/234 · (v − 0.5)` says the 30 classes actually scored ~0.764 on
+public and ~0.667 on private, against the proxy's 0.7385. So the 19 proxy classes are
+somewhat easier than the 30 they stand in for — worth remembering before trusting the
+same method again.
+
+Public and private also diverged for the first time: 0.0127 apart, against 0.00018 on
+v1. The cold-start heads are the new variance. They are fitted on at most 30 focal
+segments per class for species with no in-domain data at all, so how well any one of
+them transfers depends on which recordings land in which split.
+
+This is also the limit of the section 5 negative result. Focal audio hurt classes that
+already had soundscape data. For these 30 the incumbent was a coin flip, and the same
+data is worth +0.021. Generalising "focal audio hurts" across both would have been
+wrong.
+
+The same experiment says explicitly *not* to touch the 129 classes that fall back to
+zero-shot. Measured on the mapped-and-labelled cohort, zero-shot scores 0.8128 against
+a focal head's 0.7809, and a 50/50 blend gains nothing. That would have been a
+regression.
+
+## 9. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
@@ -169,10 +219,9 @@ hidden test set is the thing that has to be measured before any of this is a sco
 
 Ranked by expected value, with the arithmetic from section 7:
 
-1. **Train the 30 constant classes on focal audio.** They are 13% of the metric and
-   currently score 0.5 by default. Their focal embeddings are already extracted in
-   `data/emb_train/`, so this is a head-fitting change, not a data-collection one.
-   Moving them to 0.75 is worth +0.032; to 0.85, +0.045.
+1. ~~Train the 30 constant classes on focal audio.~~ **Done, section 8: +0.021
+   private.** The remaining headroom in that cohort is real but smaller — they are at
+   ~0.667 on private against ~0.885 for the rest.
 2. **Pseudo-label the 10,592 unlabelled soundscape files.** `train_soundscapes/`
    holds 10,658 recordings and only 66 are labelled. That is the largest in-domain
    resource in the competition and it is completely unused. (An earlier version of
@@ -186,7 +235,7 @@ Ranked by expected value, with the arithmetic from section 7:
 4. **Fine-tune BirdNET rather than freezing it.** Everything here is a linear probe.
    The domain gap in section 5 is exactly what fine-tuning addresses.
 
-## 9. Files
+## 10. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding
