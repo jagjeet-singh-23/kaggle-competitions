@@ -139,9 +139,35 @@ step(f"embedded {len(row_ids):,} windows")
 Z, hit = zero_shot(Lte, tax)
 Xte = sc.transform(np.hstack([Ete, Lte[:, keep]]))
 
+# ---- cold-start heads for the classes with neither route ------------------------
+# 30 classes have no BirdNET column and no labelled positive, so they would emit a
+# 0.5 constant. That is 13% of a macro-averaged metric and accounted for essentially
+# the whole 0.8881 -> 0.83575 gap on the first submission. All of them do have focal
+# audio, and a focal-only head scores 0.7385 against 0.5 on a scoreable proxy cohort
+# of the same shape (coldstart.py). 30 segments per class beat 150 and 400.
+#
+# This is deliberately NOT applied to the 129 classes that fall back to zero-shot:
+# measured on the mapped-and-labelled cohort, zero-shot is 0.8128 against a focal
+# head's 0.7809, and blending the two gains nothing.
+fc = np.load(f"{ASSETS}/focal_cap30.npz")
+Xf, yf = fc["emb"].astype(np.float32), fc["label"]
+scf = StandardScaler().fit(Xf)          # focal heads are embedding-only, so their own
+Xf_s, Xte_f = scf.transform(Xf), scf.transform(Ete)
+cold = [j for j in range(len(classes))
+        if not has_pos[j] and not hit[j] and (yf == j).sum() > 0]
+cold_models = {}
+for j in cold:
+    cold_models[j] = LogisticRegression(C=0.01, max_iter=2000,
+                                        class_weight="balanced").fit(Xf_s, (yf == j).astype(int))
+step(f"fitted {len(cold_models)} cold-start heads on focal audio")
+
 rank = lambda v: np.argsort(np.argsort(v)) / max(1, len(v) - 1)
 P = np.full((len(row_ids), len(classes)), 0.5)
+sources = {"head": 0, "zero-shot": 0, "cold-start": 0, "constant": 0}
 for j in range(len(classes)):
+    sources["head" if j in models else
+            "zero-shot" if hit[j] else
+            "cold-start" if j in cold_models else "constant"] += 1
     if j in models:
         p = rank(models[j].predict_proba(Xte)[:, 1])
         # Blend zero-shot only where BirdNET actually has an output column for the
@@ -151,7 +177,10 @@ for j in range(len(classes)):
         # No labelled positive to train on, but BirdNET knows this species: its
         # zero-shot logits beat the constant a head would otherwise emit.
         P[:, j] = rank(Z[:, j])
-step("predicted")
+    elif j in cold_models:
+        P[:, j] = rank(cold_models[j].predict_proba(Xte_f)[:, 1])
+step("predicted by source: " + ", ".join(f"{k} {v}" for k, v in sources.items()))
+assert sources["constant"] == 0, f"{sources['constant']} classes still emit 0.5"
 
 sub = pd.DataFrame(P, columns=classes)
 sub.insert(0, "row_id", row_ids)
