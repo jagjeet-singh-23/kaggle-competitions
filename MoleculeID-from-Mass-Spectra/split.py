@@ -25,7 +25,7 @@ import os
 
 import numpy as np
 
-from library import rss_gb
+from library import canonical_keys, rss_gb
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = f"{DIR}/data"
@@ -37,14 +37,22 @@ MAX_SPECTRA = 4          # queries per molecule; the real test has median 3
 
 
 def load_keys():
-    """Only the two small string columns. The peak arrays are 725 MB and not needed
-    to decide which rows go where."""
-    keys, libs = [], []
+    """Only the string columns. The peak arrays are 725 MB and not needed to decide
+    which rows go where.
+
+    Structures are identified by RDKit's key14, not the shipped inchikey14 column.
+    Grouping on the shipped column would split one molecule across two groups on the
+    0.5% of rows where the two standardisers disagree, which is how a class 2 or 3
+    molecule keeps spectra in the index and stops being novel. See
+    library.canonical_keys.
+    """
+    smiles, libs = [], []
     for f in sorted(glob.glob(f"{SHARDS}/rg_*.npz")):
         with np.load(f) as d:
-            keys.append(d["inchikey14"])
+            smiles.append(d["smiles"])
             libs.append(d["lib"])
-    return np.concatenate(keys), np.concatenate(libs)
+    smiles = np.concatenate(smiles)
+    return canonical_keys(smiles), np.concatenate(libs)
 
 
 def build(seed=0):

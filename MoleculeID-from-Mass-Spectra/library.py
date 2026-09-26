@@ -128,14 +128,92 @@ def build():
     print(f"\n{SHARDS}/: {n_kept:,} spectra, peak RSS {rss_gb():.1f} GB")
 
 
-def load():
-    """Concatenate the shards. About 1.3 GB for the full index."""
+KEYS = f"{DATA}/key14.npz"
+
+
+def load(canonical=True):
+    """Concatenate the shards. About 1.3 GB for the full index.
+
+    With canonical=True the inchikey14 column is replaced by RDKit's own key for
+    each row's SMILES. See canonical_keys for why the shipped column cannot be used.
+    """
     import glob
     files = sorted(glob.glob(f"{SHARDS}/rg_*.npz"))
     assert files, f"no shards in {SHARDS}; run `python3 library.py` first"
     parts = [np.load(f) for f in files]
-    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
+    ix = {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
+    if canonical:
+        ix["inchikey14"] = canonical_keys(ix["smiles"])
+    return ix
+
+
+def canonical_keys(smiles):
+    """RDKit key14 for each SMILES, cached in data/key14.npz.
+
+    The dataset ships an inchikey14 column, but on 0.5% of rows it disagrees with
+    the key RDKit derives from that same row's SMILES -- almost all amide/imide
+    tautomers, where the two standardisers pick different forms.
+
+    The competition metric only ever uses the RDKit key. So grouping or banning on
+    the shipped column leaks: a structure held out by dataset key can still sit in
+    the index under a row whose dataset key differs but whose RDKit key matches.
+    Measured on the held-out split, that leak put class 3 at 0.0050 instead of the
+    0 it is supposed to be by construction.
+
+    Unparseable SMILES keep a distinct per-row key so they can never collide.
+    """
+    import hashlib
+    from metric import key14
+
+    # Validated by hashing the smiles column, not by re-deriving the unique set: the
+    # np.unique is the slow half of this function, so checking the cache that way
+    # would cost most of what the cache saves. md5 over 565 MB is about a second.
+    h = hashlib.md5(np.ascontiguousarray(smiles)).hexdigest()
+    if os.path.exists(KEYS):
+        with np.load(KEYS) as d:
+            if str(d["hash"]) == h:
+                return d["key"]
+
+    uniq, inv = np.unique(smiles, return_inverse=True)
+    print(f"canonicalising {len(uniq):,} structures (~{len(uniq) * 2.4 / 60000:.0f} min)",
+          flush=True)
+    out = np.zeros(len(uniq), dtype="S14")
+    for i, s in enumerate(uniq):
+        k = key14(s.decode())
+        # A None key means RDKit could not parse it. Falling back to a hash keeps the
+        # row in the index while guaranteeing it matches nothing, which is correct:
+        # the metric would score it 0 anyway.
+        out[i] = k.encode() if k else b"?" + hashlib.md5(s).hexdigest()[:13].encode()
+        if i % 25_000 == 0 and i:
+            print(f"  {i:,}/{len(uniq):,}", flush=True)
+    key = out[inv]
+    np.savez(KEYS, key=key, hash=h)
+    print(f"wrote {KEYS}")
+    return key
+
+
+def selftest():
+    """trim decides what both sides of every cosine look like, so check it directly."""
+    mz = np.array([100.0, 150.0, 200.0, 402.0, 500.0])   # 500 is above precursor + 2
+    it = np.array([0.25, 0.001, 1.0, 0.04, 0.9])         # 0.001 is below FLOOR
+    m, v = trim(mz, it, 400.0)
+    assert list(m) == [100.0, 200.0, 402.0], m           # noise and >precursor dropped
+    assert np.allclose(v, np.sqrt([0.25, 1.0, 0.04])), v  # intensities sqrt-scaled
+    assert np.all(np.diff(m) > 0), "output must be sorted by m/z"
+
+    # Over PEAKS peaks: keep the most intense, still sorted by m/z.
+    rng = np.random.default_rng(0)
+    big_mz = np.sort(rng.uniform(50, 900, 500))
+    big_it = rng.uniform(FLOOR, 1.0, 500)
+    m, v = trim(big_mz, big_it, 1000.0)
+    assert len(m) == PEAKS and np.all(np.diff(m) > 0)
+    assert v.min() ** 2 >= np.sort(big_it)[-PEAKS] - 1e-9, "did not keep the top peaks"
+
+    # A spectrum that survives trimming must cosine to 1 against itself.
+    q = v / np.linalg.norm(v)
+    assert abs(float(q @ q) - 1.0) < 1e-6
+    print("library self-checks passed")
 
 
 if __name__ == "__main__":
-    build()
+    selftest() if "--selftest" in sys.argv else build()

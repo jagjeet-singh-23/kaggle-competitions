@@ -96,16 +96,37 @@ candidates per molecule.
 | Data | 2,539,608 spectra, 275,810 unique structures |
 | Constraint | 9 h CPU or GPU, no internet |
 
-[GUIDE.md](MoleculeID-from-Mass-Spectra/GUIDE.md) covers the three novelty classes
-(spectral-library retrieval, database retrieval, de novo generation) and the approach
-ladder for each. The measurement that changes the preprocessing:
+**[→ RESULTS.md](MoleculeID-from-Mass-Spectra/RESULTS.md)**
 
-> Test spectra have a median of **230 peaks**. The training libraries whose chemistry
-> best matches the test set — `riken` (plant metabolites), `massbank`, `msdial` — have
-> medians of **9, 11 and 11**. They ship heavily thresholded.
+Library search is built and measured on a held-out split that simulates the three
+novelty classes:
 
-Symmetric cosine similarity therefore fails against exactly the references that matter
-most, because the test spectrum carries ~220 peaks the reference never recorded.
+| held-out class | MRR@25 |
+|---|---|
+| 1 — spectra exist in another library | **0.9390** |
+| 2 — structure listed, no spectra | 0.0000 |
+| 3 — structure absent entirely | 0.0000 |
+
+Classes 2 and 3 are 0 *by construction* — that is the ceiling of library search, and
+those two classes are 69% of the problem.
+
+Two findings worth the click:
+
+- **The visible test set cannot measure anything.** It ships with answers, and the
+  submission scores **0.9975** against them. All 400 visible molecules were located in
+  `train.parquet` by matching `(precursor_mz, adduct, num_peaks)` — it is entirely
+  class 1, while the hidden test is a mix of all three. Tuning against that number is
+  tuning against a set that does not contain the problem.
+- **A 0.5% key mismatch was leaking the split.** The dataset ships an `inchikey14`
+  column; the metric scores on the key RDKit derives from the SMILES. They disagree on
+  amide/imide tautomers, so structures held out by dataset key stayed reachable, and
+  class 3 scored 0.0050 when it must be 0. Canonicalising everything through RDKit
+  merged 1,148 structures and dropped class 1 from 0.9643 to its honest 0.9390.
+
+The measurement that shapes the preprocessing: test spectra have a median of **230
+peaks**, while the libraries whose chemistry best matches them — `riken`, `massbank`,
+`msdial` — have medians of **9, 11 and 11**. Symmetric cosine therefore fails against
+exactly the references that matter most.
 
 ---
 

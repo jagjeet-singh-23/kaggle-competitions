@@ -153,16 +153,29 @@ def evaluate():
     print("Only the class 1 number says anything about library search itself.")
 
     assert overall[0] > 0, "library search should find class 1 molecules"
+    # Anything above 0 here means a held-out structure is still reachable, i.e. the
+    # split leaks. It did: grouping on the shipped inchikey14 column instead of
+    # RDKit's key left class 3 at 0.0050. See library.canonical_keys.
+    assert overall[2] == 0, f"class 3 leaked: {overall[2]:.4f}"
     return overall
 
 
 def submit(path=f"{DIR}/submission.csv"):
+    """Write submission.csv for the real test set.
+
+    Queries go through library.trim, the same curation the index rows had. This is not
+    cosmetic: evaluate() draws its queries out of the index, so it measures
+    trimmed-against-trimmed, and feeding raw test spectra here would measure something
+    else entirely. Test spectra carry a median of 230 peaks against a library median
+    of 9 to 11, so an untrimmed query is normalised over ~220 peaks the reference
+    never recorded and scores low against exactly the libraries that matter most.
+    """
     import pandas as pd
     te = pd.read_parquet(f"{DATA}/test.parquet")
     se = Searcher()
     rows = []
     for mid, g in te.groupby("molecule_id"):
-        spectra = [(np.asarray(a, np.float32), np.sqrt(np.asarray(b, np.float32)), p)
+        spectra = [library.trim(a, b, p) + (p,)
                    for a, b, p in zip(g.ms2_mzs, g.ms2_normalized_intensities,
                                       g.precursor_mz)]
         cands = se.rank(spectra) or ["C"]
