@@ -47,7 +47,10 @@ was `ru_maxrss`, which reports kilobytes on Linux and bytes on macOS — handled
 |---|---|---|---|
 | `MoleculeID/library.py` (build index) | 4.9 GB | 1.3 GB out, 2.9 GB in | ~25 min |
 | `MoleculeID/split.py` | 0.2 GB | 73 KB | ~1 min |
-| `MoleculeID/search.py` | ~2.5 GB | — | not yet measured |
+| `MoleculeID/canonical_keys` (once, cached) | 1.8 GB | 4 MB | ~20 min |
+| `MoleculeID/search.py` | ~2.5 GB | — | 3 s |
+| `MoleculeID/analog.py --build` | ~2.5 GB | 153 MB | ~2 min |
+| `MoleculeID/analog.py` | ~2.7 GB | — | ~6 min |
 | `BirdCLEF/embed_train.py` | < 1 GB | 251 MB out, 16 GB in | ~4 h |
 | `BirdCLEF/rung1c.py` | < 1 GB | — | ~20 min |
 | `LANL/*.py` | ~3 GB | 9.1 GB in | minutes |
@@ -93,7 +96,9 @@ Every non-trivial module has a self-check that needs no competition data:
 
 ```bash
 python3 MoleculeID-from-Mass-Spectra/metric.py          # MRR@25 vs the rules' examples
+python3 MoleculeID-from-Mass-Spectra/library.py --selftest
 python3 MoleculeID-from-Mass-Spectra/search.py --selftest
+python3 MoleculeID-from-Mass-Spectra/analog.py --selftest
 python3 BirdCLEF/rung1c.py --selftest
 ```
 

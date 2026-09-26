@@ -88,12 +88,21 @@ class Searcher:
         return rows, sim.sum(axis=1)
 
     def rank(self, spectra):
-        """spectra: list of (mzs, ints, precursor) for one molecule -> top-25 SMILES.
+        """spectra: list of (mzs, ints, precursor) for one molecule -> top-25 SMILES."""
+        total, smiles = self.score_structures(spectra)
+        top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
+        return [smiles[k].decode() for k, _ in top]
+
+    def score_structures(self, spectra):
+        """spectra: list of (mzs, ints, precursor) -> ({key: score}, {key: smiles}).
 
         A structure's score is summed over the query spectra, taking its best row
         within each. Summing rewards a structure that explains several acquisitions;
         taking the max within one spectrum stops a structure with many near-identical
         library entries from winning on count alone.
+
+        Scores are returned rather than only the ranking because analog propagation
+        needs them: a seed's spectral score is what weights its analogs.
         """
         total = defaultdict(float)
         best_smiles = {}
@@ -111,8 +120,7 @@ class Searcher:
                 total[k] += float(v)
                 if k not in best_smiles:
                     best_smiles[k] = self.ix["smiles"][r]
-        top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
-        return [best_smiles[k].decode() for k, _ in top]
+        return dict(total), best_smiles
 
 
 def spectra_of(ix, rows):

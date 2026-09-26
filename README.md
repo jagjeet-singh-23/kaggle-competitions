@@ -98,19 +98,21 @@ candidates per molecule.
 
 **[→ RESULTS.md](MoleculeID-from-Mass-Spectra/RESULTS.md)**
 
-Library search is built and measured on a held-out split that simulates the three
-novelty classes:
+Measured on a held-out split that simulates the three novelty classes:
 
-| held-out class | MRR@25 |
-|---|---|
-| 1 — spectra exist in another library | **0.9390** |
-| 2 — structure listed, no spectra | 0.0000 |
-| 3 — structure absent entirely | 0.0000 |
+| held-out class | library search | + analog propagation |
+|---|---|---|
+| 1 — spectra exist in another library | 0.9390 | **0.9420** |
+| 2 — structure listed, no spectra | 0.0000 | **0.0676** |
+| 3 — structure absent entirely | 0.0000 | 0.0000 |
+| mean | 0.3130 | **0.3365** |
 
-Classes 2 and 3 are 0 *by construction* — that is the ceiling of library search, and
-those two classes are 69% of the problem.
+Class 3 is 0 *by construction* and cannot be otherwise — the structure is banned from
+the candidate list, so no retrieval method reaches it. Class 2 was 0 for the same
+reason until analog propagation: score a candidate by how similar it is to the
+best-matching structure that *does* have spectra, inside a 5 ppm neutral-mass window.
 
-Two findings worth the click:
+Three findings worth the click:
 
 - **The visible test set cannot measure anything.** It ships with answers, and the
   submission scores **0.9975** against them. All 400 visible molecules were located in
@@ -122,6 +124,12 @@ Two findings worth the click:
   amide/imide tautomers, so structures held out by dataset key stayed reachable, and
   class 3 scored 0.0050 when it must be 0. Canonicalising everything through RDKit
   merged 1,148 structures and dropped class 1 from 0.9643 to its honest 0.9390.
+
+- **One analog seed beats a hundred.** Using only the single best spectral match as a
+  seed scores 0.0587 on class 2; ten seeds give 0.0535 and a hundred give 0.0510.
+  Seeds past the first are worse matches whose analogs dilute the ranking — and
+  *summing* their evidence instead of taking the max drops class 1 from 0.9415 to
+  0.8882.
 
 The measurement that shapes the preprocessing: test spectra have a median of **230
 peaks**, while the libraries whose chemistry best matches them — `riken`, `massbank`,
