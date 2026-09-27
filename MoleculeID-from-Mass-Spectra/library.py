@@ -136,11 +136,16 @@ def build():
 KEYS = f"{WORK}/key14.npz"
 
 
-def load(canonical=True):
+def load(canonical=True, cols=None):
     """Concatenate the shards. About 1.3 GB for the full index.
 
     With canonical=True the inchikey14 column is replaced by RDKit's own key for
     each row's SMILES. See canonical_keys for why the shipped column cannot be used.
+
+    `cols` drops columns from the returned dict. The smiles column alone is 567 MB
+    and is not needed to train on peaks, but it is still loaded and hashed first so
+    the canonical-key cache is validated rather than trusted -- the saving is in the
+    steady state, not the peak.
     """
     import glob
     files = sorted(glob.glob(f"{SHARDS}/rg_*.npz"))
@@ -149,6 +154,9 @@ def load(canonical=True):
     ix = {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
     if canonical:
         ix["inchikey14"] = canonical_keys(ix["smiles"])
+    if cols is not None:
+        for k in [k for k in ix if k not in cols]:
+            del ix[k]
     return ix
 
 
