@@ -210,7 +210,59 @@ zero-shot. Measured on the mapped-and-labelled cohort, zero-shot scores 0.8128 a
 a focal head's 0.7809, and a 50/50 blend gains nothing. That would have been a
 regression.
 
-## 9. Where this stands and what is next
+## 9. Negative result: pseudo-labelling 177 hours of in-domain audio bought ~0.004
+
+`train_soundscapes/` holds 10,658 recordings and 66 are labelled. The other 10,592 —
+177 hours, 127,104 windows — are from the scored domain and were completely unused.
+This looked like the largest remaining lever, because every failure up to here had
+been a domain-gap failure and this data has no gap to cross. Extraction took 209
+minutes.
+
+It did not deliver. Two cohorts, measured independently:
+
+| cohort | share of metric | baseline | with pseudo-labels | gain |
+|---|---|---|---|---|
+| 75 classes with labels | 32% | 0.8756 | 0.8799 | +0.0043 |
+| 129 mapped, unlabelled | 55% | 0.8128 | 0.8174 | +0.0046 |
+
+Combined macro effect is about **+0.004** — against +0.021 measured on the
+leaderboard for the far cheaper cold-start change in section 8.
+
+Both numbers are weak on their own terms. On the 75 classes only 25 of them improve,
+so the positive mean comes from a few large gains against many small losses. On the
+129-class proxy the gain is 1.6 sigma at the blend weight that maximises it, and the
+sweep shows why that weight matters:
+
+| weight on the taught head | gain | sem | sigma |
+|---|---|---|---|
+| 0.1 | +0.0046 | 0.0029 | 1.6 |
+| 0.3 | +0.0113 | 0.0099 | 1.1 |
+| 0.5 | +0.0128 | 0.0173 | 0.7 |
+
+A larger blend weight buys a larger point estimate and loses more than it gains in
+certainty. The two cohorts agreeing at ~+0.004 is the only reassuring part.
+
+### Three hypotheses formed and discarded along the way
+
+Worth recording, because all three came from reading means without measuring spread.
+
+1. **"More unlabelled data helps."** Pool sizes 3 through 7 gave a clean monotone
+   rise, 0.8331 to 0.8390.
+2. **"More unlabelled data hurts."** Extending to 11 and 22 shards reversed it,
+   0.8370 then 0.8256, and a site-composition story was constructed to explain it.
+3. **"Top-k concentrates on a few loud recordings as the pool grows."** Measured: the
+   top-25 spans 13.7 files at one shard and 15.4 at twenty-two. It spreads out, not in.
+
+The paired comparison settles it. Between 7 and 22 shards the difference is −0.0134
+with a standard error of 0.0085 — **1.6 sigma, and the per-class standard deviation
+of the difference is 0.0448, more than three times the mean difference.** The pool
+size was never doing anything. Two opposite trends were read out of the same noise
+before anyone checked the spread.
+
+The full pool is used regardless. Picking 7 shards because a 28-class estimate liked
+it is exactly the overfitting that cost this repo its LANL private score.
+
+## 10. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
@@ -222,12 +274,10 @@ Ranked by expected value, with the arithmetic from section 7:
 1. ~~Train the 30 constant classes on focal audio.~~ **Done, section 8: +0.021
    private.** The remaining headroom in that cohort is real but smaller — they are at
    ~0.667 on private against ~0.885 for the rest.
-2. **Pseudo-label the 10,592 unlabelled soundscape files.** `train_soundscapes/`
-   holds 10,658 recordings and only 66 are labelled. That is the largest in-domain
-   resource in the competition and it is completely unused. (An earlier version of
-   this list said to recover "1,478" labelled segments instead of 739 — that was
-   wrong. The shipped csv contains every row exactly twice, one row per
-   `(filename, start)`, so 739 is the true count and the de-duplication is correct.)
+2. ~~Pseudo-label the 10,592 unlabelled soundscape files.~~ **Done, section 9:
+   about +0.004, and weakly supported.** The in-domain data is real but a linear
+   probe on frozen features cannot extract much more from it than BirdNET already
+   provides. This is an argument for fine-tuning, not against the data.
 3. **Energy-based window selection.** `starts_for()` spreads windows uniformly; 12% of
    clips run past a minute with the call anywhere in them. This is the most likely
    source of label noise in the focal set — and worth retrying section 5 after fixing,
@@ -235,7 +285,7 @@ Ranked by expected value, with the arithmetic from section 7:
 4. **Fine-tune BirdNET rather than freezing it.** Everything here is a linear probe.
    The domain gap in section 5 is exactly what fine-tuning addresses.
 
-## 10. Files
+## 11. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding
