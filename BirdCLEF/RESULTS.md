@@ -262,7 +262,82 @@ before anyone checked the spread.
 The full pool is used regardless. Picking 7 shards because a 28-class estimate liked
 it is exactly the overfitting that cost this repo its LANL private score.
 
-## 10. Where this stands and what is next
+## 10. Negative result: the head is not the bottleneck, the representation is
+
+Three data sources in a row returned little or nothing (sections 5, 8, 9). "Capacity"
+was the explanation offered, but that word hides two claims with very different price
+tags:
+
+- **head capacity** — the linear probe is too weak, and a nonlinear head fixes it with
+  the backbone frozen. Cheap to test.
+- **representation** — BirdNET's features have said all they can, and only fine-tuning
+  the backbone helps. Expensive, and as it turns out, unavailable.
+
+`mlp.py` settles the cheap one. Every configuration lost:
+
+| hidden | best of 8 configs | vs linear 0.8774 |
+|---|---|---|
+| 64 | 0.8602 | −0.0172 |
+| 256 | 0.8709 | −0.0065 |
+| 512 | 0.8727 | −0.0047 |
+
+**24 of 24 configurations below the linear probe**, and the shape of the failure is
+the informative part: the deficit shrinks monotonically as the hidden layer grows. A
+wider trunk is not learning something new, it is slowly re-learning the linear
+solution from below. Head capacity is not the constraint.
+
+### The experiment had to be redesigned twice first
+
+The obvious version of this test — swap the linear layer for an MLP and retrain —
+does not answer the question, because it changes two things at once. Two bugs found
+before any number here could be trusted:
+
+1. **Learning rate.** At `lr=1e-3` a full-batch model needs thousands of steps to fit
+   a trivially separable toy problem (AUC 0.810 at 200 steps, 0.997 at 3000). The
+   first grid used 300 and 800 epochs, so it would have compared two under-trained
+   models and blamed the MLP for having more parameters to move. A self-check on the
+   toy problem caught it.
+
+2. **Joint optimisation is a handicap, not a treatment.** A linear layer over 234
+   outputs is 234 *independent* problems — there is no shared trunk for them to
+   benefit from. Optimising all 276k parameters together converges far worse per class
+   than 234 dedicated solves: jointly trained, the linear model scores **0.67** against
+   sklearn's 0.8774 on identical folds and features, while a single-class torch fit
+   reproduces sklearn to three decimals (0.9978 vs 0.9974). The original design
+   justified joint training as letting classes "share statistical strength", which for
+   a linear layer is not a thing that exists.
+
+The fix is two stages: train the trunk jointly to learn features, throw it away except
+for its hidden layer, then fit the final classifier with the *same per-class sklearn
+call the baseline uses*. `hidden=0` is an identity trunk and must reproduce 0.8774
+exactly, which is asserted rather than hoped for.
+
+Two further hypotheses about the 0.67 were formed and measured wrong before the real
+cause was found: that decoupled weight decay was mis-scaled by the loss reduction
+(`wd=0` gives the same 0.6731, and Adam is scale-invariant anyway), and that the L2
+strength simply needed matching to sklearn's `C=0.01` (the matched value is ~3.6e-4,
+which was already in the swept range). Train AUC was 1.0000 at every setting, which
+should have been the first thing looked at: AUC is invariant to uniformly scaling the
+weights, so weight decay can barely move it.
+
+### Why fine-tuning is not the answer here either
+
+Checked rather than assumed:
+
+- BirdNET V2.4 ships as `.tflite`, an **inference-only** format. There is no gradient
+  path through it.
+- The upstream releases publish GUI installers, not a bare trainable checkpoint, and
+  BirdNET-Analyzer's own "training" feature trains a classifier *on embeddings* —
+  precisely the thing sections 8, 9 and this one have exhausted.
+- No CUDA device is available (`torch.cuda.is_available()` is False), and no
+  TensorFlow is installed.
+
+So the remaining levers are not about the head or the backbone. They are about giving
+the frozen encoder **different audio** — mixing focal calls into soundscape
+backgrounds produces genuinely new embedding vectors, and is directly motivated by
+section 5's finding that focal audio fails on domain rather than on content.
+
+## 11. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
@@ -282,10 +357,11 @@ Ranked by expected value, with the arithmetic from section 7:
    clips run past a minute with the call anywhere in them. This is the most likely
    source of label noise in the focal set — and worth retrying section 5 after fixing,
    since a cleaner focal set is the one thing that might change that result.
-4. **Fine-tune BirdNET rather than freezing it.** Everything here is a linear probe.
-   The domain gap in section 5 is exactly what fine-tuning addresses.
+4. ~~Fine-tune BirdNET rather than freezing it.~~ **Not available, section 10.** The
+   model ships as inference-only `.tflite`, upstream publishes no bare trainable
+   checkpoint, and there is no GPU or TensorFlow here.
 
-## 11. Files
+## 12. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding
