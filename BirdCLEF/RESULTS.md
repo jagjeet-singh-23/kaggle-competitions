@@ -392,7 +392,66 @@ with real labels; the cold-start gain was estimated on a 19-class proxy standing
 for 30 classes that cannot be validated at all. Proxy cohorts predict the direction
 but not the magnitude.
 
-## 12. Where this stands and what is next
+## 12. Negative result: mixing focal calls into soundscapes changed nothing
+
+Section 10 left exactly one data lever unblocked. Everything else asks the frozen
+encoder for more from the same audio; this hands it *different* audio, so it gets
+genuinely new embedding vectors back. It is also the direct test of section 5's
+explanation — that 333 hours of focal audio failed on **domain** rather than content.
+Mixing a focal call into a real soundscape background keeps the content and replaces
+the domain.
+
+6,180 mixtures, 30 per class across 206 classes, 9.5 minutes to generate.
+
+**The first attempt was far worse than doing nothing, and the reason was a real bug.**
+Backgrounds were chosen as the quietest 10% of unlabelled windows *by BirdNET's
+strongest mapped logit*. Measured afterwards: those windows have a median RMS of
+0.0193, and the **loudest** 10% have 0.0192 — a ratio of 0.99. Low BirdNET confidence
+is not acoustic quiet. Those are wind, rain and insect noise: loud broadband maskers
+that BirdNET cannot name. Calls were then mixed as much as 5 dB *below* them.
+
+| cold-start cohort (19 scoreable stand-ins) | mean AUC | vs raw focal |
+|---|---|---|
+| raw focal | 0.7385 | — |
+| mixtures, backgrounds by confidence, SNR −5..15 dB | 0.6578 | −0.0807 |
+| mixtures, backgrounds by **energy**, SNR 5..25 dB | 0.7339 | −0.0047 |
+
+Fixing the background selection recovered the entire deficit. It bought nothing
+beyond that: corrected mixtures are statistically indistinguishable from raw focal
+audio (−0.2 sigma, better on 7 of 19 classes).
+
+| 75 labelled classes (real labels, no proxy) | mean AUC | vs labelled only |
+|---|---|---|
+| labelled only | **0.8756** | — |
+| + mixtures, weight 0.1 | 0.8310 | −0.0446 |
+| + raw focal (section 5) | 0.8265 | −0.0491 |
+
+Mixtures beat raw focal here by 0.0045 — the direction section 5 predicted, and far
+too small to matter. Both remain far below simply not using out-of-domain audio.
+
+So the domain hypothesis is not refuted, it is just worth almost nothing. Replacing
+the acoustic domain of focal audio recovers a sliver of what focal audio loses, and
+never enough to make it useful where in-domain labels already exist.
+
+**BirdCLEF is blocked at 0.87008.** Seven levers, and the pattern is the whole
+result:
+
+| lever | result |
+|---|---|
+| 333 h focal audio, where labels already existed | −0.05 |
+| focal audio for the 30 classes that had none | **+0.021** |
+| 177 h in-domain pseudo-labels | +0.004, 1.6σ |
+| nonlinear head, 24 configurations | 24/24 below linear |
+| all 6,522 BirdNET logits instead of 157 | −0.012 |
+| temporal smoothing across a recording | **+0.013** |
+| focal calls mixed into soundscape backgrounds | ±0.000 |
+
+Every attempt to extract more from the features failed. Both changes that left the
+features alone worked — one gave a prediction to classes that had none, the other
+used structure in the output space. The frozen representation is the ceiling, and the
+only thing that lifts it is fine-tuning, which is unavailable here.
+
+## 13. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
@@ -416,7 +475,7 @@ Ranked by expected value, with the arithmetic from section 7:
    model ships as inference-only `.tflite`, upstream publishes no bare trainable
    checkpoint, and there is no GPU or TensorFlow here.
 
-## 13. Files
+## 14. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding

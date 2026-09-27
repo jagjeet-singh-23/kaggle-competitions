@@ -33,11 +33,13 @@ from embed_soundscape import load as load_unlabelled
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("BIRDCLEF_DATA", f"{DIR}/data")
-OUT = f"{DATA}/emb_mix"
+OUT = os.environ.get("MIX_OUT", f"{DATA}/emb_mix")
 
 PER_CLASS = 30           # matches the cap that keeps winning elsewhere
 QUIET_PCT = 10           # background pool: quietest this-% of unlabelled windows
-SNR_DB = (-5.0, 15.0)    # focal level relative to background, sampled per mixture
+SNR_DB = (float(os.environ.get("MIX_SNR_LO", -5.0)),
+          float(os.environ.get("MIX_SNR_HI", 15.0)))
+BG_BY_RMS = int(os.environ.get("MIX_BG_RMS", 0))   # keep this many quietest-by-energy
 SHARD = 20               # classes per shard
 
 
@@ -71,11 +73,38 @@ def loudest_window(y, sr=SR_IN):
 
 
 def backgrounds():
-    """Quietest QUIET_PCT of unlabelled windows, as (filename, start_s) pairs."""
+    """Background windows, as (filename, start_s) pairs.
+
+    Low BirdNET confidence alone is NOT acoustic quiet: measured, the quietest 10% by
+    confidence have the same median RMS as the loudest 10% (ratio 0.99). Those windows
+    are wind, rain and insect noise -- loud broadband maskers that BirdNET simply
+    cannot name. Mixing a call under one of them produces garbage, which is what the
+    first attempt did.
+
+    With BG_BY_RMS set, the low-confidence pool is then ranked by actual energy and
+    only the quietest that many are kept.
+    """
     u = load_unlabelled()
     mx = u["logits"].astype(np.float32).max(1)
-    keep = mx <= np.percentile(mx, QUIET_PCT)
-    return list(zip(u["filename"][keep], u["start_s"][keep]))
+    keep = np.where(mx <= np.percentile(mx, QUIET_PCT))[0]
+    pairs = list(zip(u["filename"][keep], u["start_s"][keep]))
+    if not BG_BY_RMS:
+        return pairs
+    rng = np.random.default_rng(0)
+    cand = [pairs[i] for i in rng.choice(len(pairs), min(len(pairs), 4 * BG_BY_RMS),
+                                         replace=False)]
+    scored = []
+    for f, st in cand:
+        try:
+            scored.append((rms(read_window(f"{DATA}/train_soundscapes/{f}", int(st))),
+                           (f, st)))
+        except Exception:
+            pass
+    scored.sort(key=lambda t: t[0])
+    print(f"background RMS: quietest {scored[0][0]:.4f}, "
+          f"kept up to {scored[min(BG_BY_RMS, len(scored)) - 1][0]:.4f}, "
+          f"loudest candidate {scored[-1][0]:.4f}", flush=True)
+    return [p for _, p in scored[:BG_BY_RMS]]
 
 
 def read_window(path, start_s):

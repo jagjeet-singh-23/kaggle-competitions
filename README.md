@@ -126,6 +126,7 @@ finding:
 | nonlinear head, 24 configurations | 24/24 below linear |
 | all 6,522 BirdNET logits instead of 157 | −0.012 |
 | temporal smoothing across a recording | **+0.013** |
+| focal calls mixed into soundscape backgrounds | ±0.000 |
 
 Every attack on the *features* failed; both changes that left the features alone
 worked. One gives a prediction to classes that had none, the other exploits structure
