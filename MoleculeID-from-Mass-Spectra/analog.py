@@ -95,7 +95,7 @@ def build():
 class Analog:
     """Mass-windowed candidate pool plus Tanimoto scoring against spectral seeds."""
 
-    def __init__(self, banned=None):
+    def __init__(self, banned=None, external=True):
         assert os.path.exists(DESC), "run `python3 analog.py --build` first"
         with np.load(DESC) as d:
             key, smiles, mass, fp = d["key"], d["smiles"], d["mass"], d["fp"]
@@ -104,6 +104,25 @@ class Analog:
             # be reachable here either. Without this the split would leak again.
             keep = ~np.isin(key, np.asarray(banned))
             key, smiles, mass, fp = key[keep], smiles[keep], mass[keep], fp[keep]
+        if external:
+            # A public database (COCONUT, CC0) merged in after the ban, so a structure
+            # the library does not have can still be a candidate. The ban is not
+            # re-applied: a real class 3 molecule is absent from train.parquet and
+            # findable only through exactly this route, so letting it back in here is
+            # the faithful simulation rather than a leak.
+            try:
+                import external as ext_db
+                e = ext_db.load()
+                new = ~np.isin(e["key"], key)
+                key = np.concatenate([key, e["key"][new]])
+                smiles = np.concatenate([smiles, e["smiles"][new].astype(smiles.dtype)])
+                mass = np.concatenate([mass, e["mass"][new]])
+                fp = np.concatenate([fp, e["fp"][new]])
+                self.external_n = int(new.sum())
+                print(f"external pool: +{self.external_n:,} structures")
+            except AssertionError:
+                pass
+        self.external_n = getattr(self, "external_n", 0)
         self.key, self.smiles, self.mass, self.fp = key, smiles, mass, fp
         self.order = np.argsort(mass, kind="stable")
         self.msorted = mass[self.order]

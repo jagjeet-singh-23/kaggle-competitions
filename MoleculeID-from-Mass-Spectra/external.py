@@ -13,13 +13,28 @@ the library". A real class 3 test molecule is likewise absent from train.parquet
 findable only if some public database has it. Both cases are the same situation, so
 external hits are allowed to count.
 
-    python3 external.py --build    -> data/external.npz
+**Why this does not canonicalise keys with RDKit.** The first version ran metric.key14
+on every row, which tautomer-canonicalises. On COCONUT that is the whole cost: natural
+products are large, canonicalisation scales badly with size, and the run reached 42.7%
+of the file in three hours. It was also unnecessary. The pool key is only used to
+dedupe against the index and to identify a candidate internally -- the metric
+canonicalises whatever SMILES the submission *emits*, at scoring time, and never sees
+this key. COCONUT's own InChIKey first block is sufficient. The cost is that the ~0.5%
+of structures whose shipped key disagrees with RDKit's may survive de-duplication as a
+second copy of a structure already in the index, which is harmless: a duplicate
+candidate cannot make a ranking worse than the original already made it.
+
+Sharded and resumable, which the first version was not.
+
+    python3 external.py --build    -> data/ext/shard_XXX.npz
+    python3 external.py --status
     python3 external.py            -> coverage of the held-out classes
 """
 import csv
 import io
 import os
 import sys
+import time
 import zipfile
 
 import numpy as np
@@ -29,12 +44,18 @@ from analog import FP_BITS
 
 DATA, WORK = library.DATA, library.WORK
 SRC = f"{DATA}/coconut_csv_lite.zip"
-OUT = f"{WORK}/external.npz"
+OUT = os.environ.get("CASMI_EXT", f"{WORK}/ext")
 MZ_LO, MZ_HI = 100.0, 1300.0      # the mass range the index and test occupy
+SHARD = 50_000                    # rows per shard
 
 
 def rows():
-    """(smiles, inchikey14) for every COCONUT entry inside the mass range."""
+    """(smiles, inchikey14, exact mass) for COCONUT entries inside the mass range.
+
+    The mass comes from the file rather than from RDKit: it is already there, and
+    recomputing it for 739k large molecules is the kind of avoidable cost that made
+    the first version of this script a seven-hour job.
+    """
     z = zipfile.ZipFile(SRC)
     with z.open(z.namelist()[0]) as f:
         for d in csv.DictReader(io.TextIOWrapper(f, "utf-8")):
@@ -45,60 +66,78 @@ def rows():
             except ValueError:
                 continue
             if s and len(k) == 14 and MZ_LO <= m <= MZ_HI:
-                yield s, k
+                yield s, k, m
 
 
 def build():
-    """Descriptors in the same layout as analog's structures.npz.
-
-    Keys are recomputed with RDKit rather than taken from COCONUT's own InChIKey:
-    the metric canonicalises tautomers and the shipped keys do not, which is the
-    same 0.5% mismatch that leaked the split once already (RESULTS.md section 3).
-    """
     from rdkit import Chem, RDLogger
-    from rdkit.Chem import Descriptors, rdFingerprintGenerator
+    from rdkit.Chem import rdFingerprintGenerator
     RDLogger.DisableLog("rdApp.*")
-    from metric import key14
 
-    seen = set()
-    with np.load(f"{WORK}/structures.npz") as d:
-        have = set(d["key"].tolist())
-    print(f"index already has {len(have):,} structures", flush=True)
+    os.makedirs(OUT, exist_ok=True)
+    done = {int(f.split("_")[1][:3]) for f in os.listdir(OUT) if f.endswith(".npz")}
+    print(f"{len(done)} shards already built", flush=True)
+
+    # No de-duplication against the index here, only within COCONUT. The index
+    # contains the class 3 structures -- banned from its own pool, but still listed
+    # in structures.npz -- so dropping "already known" keys would remove exactly the
+    # molecules this is meant to make reachable again. It reported 0% coverage until
+    # this was fixed. Merging handles the overlap: a key that is available from the
+    # index wins, and one that is banned there survives only via this pool.
 
     gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=FP_BITS)
-    K, S, M, F = [], [], [], []
-    n = skipped = 0
-    for smi, _ in rows():
+    t0 = time.time()
+    shard, buf = 0, []
+
+    def flush(shard, buf):
+        if shard in done or not buf:
+            return 0
+        K, S, M, F = [], [], [], []
+        for smi, k, m in buf:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            K.append(k.encode())
+            S.append(smi.encode()[:300])
+            M.append(m)
+            F.append(np.packbits(gen.GetFingerprintAsNumPy(mol)))
+        if not K:
+            return 0
+        np.savez(f"{OUT}/shard_{shard:03d}.npz",
+                 key=np.array(K, dtype="S14"), smiles=np.array(S, dtype="S300"),
+                 mass=np.array(M, np.float64), fp=np.stack(F))
+        return len(K)
+
+    seen, kept, n = set(), 0, 0
+    for smi, k, m in rows():
         n += 1
-        if n % 100_000 == 0:
-            print(f"  {n:,} scanned, {len(K):,} kept", flush=True)
-        mol = Chem.MolFromSmiles(smi)
-        if mol is None:
-            skipped += 1
-            continue
-        k = key14(smi)
-        if k is None:
-            skipped += 1
-            continue
         kb = k.encode()
-        if kb in seen or kb in have:
+        if kb in seen:
             continue
         seen.add(kb)
-        K.append(kb)
-        S.append(smi.encode()[:300])
-        M.append(Descriptors.ExactMolWt(mol))
-        F.append(np.packbits(gen.GetFingerprintAsNumPy(mol)))
-    np.savez(OUT, key=np.array(K, dtype="S14"), smiles=np.array(S, dtype="S300"),
-             mass=np.array(M, np.float64), fp=np.stack(F))
-    print(f"\nwrote {OUT}: {len(K):,} new structures "
-          f"({n:,} scanned, {skipped:,} unparseable), "
-          f"{os.path.getsize(OUT) / 1e6:.0f} MB")
+        buf.append((smi, k, m))
+        if len(buf) >= SHARD:
+            kept += flush(shard, buf)
+            el = time.time() - t0
+            print(f"  shard {shard:3d}  {n:,} scanned  {kept:,} kept  "
+                  f"{el / 60:5.1f} min", flush=True)
+            shard, buf = shard + 1, []
+    kept += flush(shard, buf)
+    print(f"\n{OUT}/: {kept:,} new structures from {n:,} scanned, "
+          f"{(time.time() - t0) / 60:.1f} min")
+
+
+def load():
+    import glob
+    fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
+    assert fs, f"no shards in {OUT}; run `python3 external.py --build` first"
+    parts = [np.load(f) for f in fs]
+    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
 
 
 def coverage():
+    ext = set(load()["key"].tolist())
     sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
-    ext = set(np.load(OUT)["key"].tolist()) if os.path.exists(OUT) else None
-    assert ext is not None, "run `python3 external.py --build` first"
     qkey, qclass = sp["qkey"], sp["qclass"]
     print(f"{len(ext):,} structures added beyond the index\n")
     for c in (1, 2, 3):
@@ -108,4 +147,10 @@ def coverage():
 
 
 if __name__ == "__main__":
-    build() if "--build" in sys.argv else coverage()
+    if "--build" in sys.argv:
+        build()
+    elif "--status" in sys.argv:
+        n = len([f for f in os.listdir(OUT) if f.endswith(".npz")]) if os.path.isdir(OUT) else 0
+        print(f"{n} shards built")
+    else:
+        coverage()
