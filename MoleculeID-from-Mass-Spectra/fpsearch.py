@@ -24,18 +24,24 @@ import torch
 
 import library
 from analog import ADDUCTS, Analog, BETA
-from fingerprint import MODEL, Net, NBIN, predict
+import fingerprint
+from fingerprint import Net, NBIN, predict
 from metric import mrr
 from search import Searcher, spectra_of
 
+DIR = os.path.dirname(os.path.abspath(__file__))
 DATA, WORK = library.DATA, library.WORK
 TOP_K = 25
-GAMMAS = (0.0, 0.5, 1.0, 2.0, 4.0)
+GAMMA = float(os.environ.get("GAMMA", 64.0))   # minimax over the plausible class mixes
+GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", "0,4,8,16,32,64").split(","))
 
 
 def load_model():
-    assert os.path.exists(MODEL), "run `python3 fingerprint.py --train --holdout` first"
-    ck = torch.load(MODEL, weights_only=False)
+    # Read through the module rather than a name bound at import time, so a caller
+    # (the Kaggle kernel) can point it at a shipped checkpoint.
+    path = fingerprint.MODEL
+    assert os.path.exists(path), "run `python3 fingerprint.py --train --holdout` first"
+    ck = torch.load(path, weights_only=False)
     bits = ck["bits"]
     m = Net(2 * NBIN + 2, len(bits))
     m.load_state_dict(ck["state"])
@@ -65,9 +71,11 @@ def main():
     an = Analog(banned=sp["banned"])
     model, bits = load_model()
 
-    # Candidate fingerprints, restricted to the bits the model predicts.
-    cand_bits = np.unpackbits(an.fp, axis=1)[:, bits].astype(np.float32)
-    cand_pop = cand_bits.sum(1)
+    # Candidate fingerprints stay packed. Unpacking all 264,127 of them to float32
+    # over the 1,575 predicted bits is 1.66 GB, which the memory guard killed; the
+    # mass window is ~115 candidates, so unpack per query instead.
+    def pool_bits(rows):
+        return np.unpackbits(an.fp[rows], axis=1)[:, bits].astype(np.float32)
 
     pos = [a for a, (_, p) in ADDUCTS.items() if p]
     neg = [a for a, (_, p) in ADDUCTS.items() if not p]
@@ -101,9 +109,10 @@ def main():
                 sm.setdefault(key_, an.smiles[an.row[key_]])
             if g and len(pool):
                 # Tanimoto between the predicted (soft) fingerprint and each
-                # candidate's, computed in one matrix product over the pool.
-                inter = cand_bits[pool] @ fpq
-                union = cand_pop[pool] + fpq.sum() - inter
+                # candidate's, in one matrix product over the mass window.
+                B = pool_bits(pool)
+                inter = B @ fpq
+                union = B.sum(1) + fpq.sum() - inter
                 t = inter / np.maximum(union, 1e-9)
                 for r, v in zip(pool, t):
                     key_ = an.key[r]
@@ -122,5 +131,54 @@ def main():
     assert best[2][2] == 0, f"class 3 leaked: {best[2][2]:.4f}"
 
 
+def submit(path=None, gamma=GAMMA):
+    """Write submission.csv using search + analog + the predicted fingerprint.
+
+    gamma is 64 by default, which is not the value that maximises the held-out mean
+    (that is 32). The held-out split weights the three classes equally and section 7
+    showed the real test does not -- class 1 is 12-15% of it. Re-weighting the sweep
+    by every plausible class mix, gamma=64 is within 2% of the best choice at each
+    one, where 32 and 256 are each 2.3% off at the far end. It is the minimax pick,
+    not the maximum.
+    """
+    import pandas as pd
+    from metric import validate
+
+    path = path or f"{DIR}/submission.csv"
+    te = pd.read_parquet(f"{DATA}/test.parquet")
+    se, an = Searcher(), Analog()
+    model, bits = load_model()
+    rows = []
+    for mid, g in te.groupby("molecule_id"):
+        spectra = [library.trim(a, b, p) + (p,)
+                   for a, b, p in zip(g.ms2_mzs, g.ms2_normalized_intensities,
+                                      g.precursor_mz)]
+        add = [a for a in pd.unique(g.adduct) if a in ADDUCTS] or ["[M+H]+"]
+        spec, smiles = se.score_structures(spectra)
+        pm = float(spectra[0][2])
+        total, sm = dict(spec), dict(smiles)
+        for k, v in an.propagate(spec, pm, add).items():
+            total[k] = total.get(k, 0.0) + BETA * v
+            sm.setdefault(k, an.smiles[an.row[k]])
+        pool = an.pool(pm, add)
+        if gamma and len(pool):
+            fpq = query_fp(model, spectra)
+            B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
+            inter = B @ fpq
+            t = inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9)
+            for r, v in zip(pool, t):
+                k = an.key[r]
+                total[k] = total.get(k, 0.0) + gamma * float(v)
+                sm.setdefault(k, an.smiles[r])
+        top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
+        cands = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q] for q, _ in top]
+        rows.append((mid, ";".join(cands[:TOP_K] or ["C"])))
+    sub = pd.DataFrame(rows, columns=["molecule_id", "smiles"])
+    validate(sub)
+    sub.to_csv(path, index=False)
+    print(f"wrote {path}: {len(sub)} molecules, "
+          f"{sub.smiles.str.split(';').str.len().mean():.1f} candidates each")
+
+
 if __name__ == "__main__":
-    main()
+    submit() if "--submit" in sys.argv else main()

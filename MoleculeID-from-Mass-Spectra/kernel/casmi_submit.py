@@ -62,6 +62,14 @@ sys.path.insert(0, CODE)
 
 import library            # noqa: E402
 import analog             # noqa: E402
+import fingerprint        # noqa: E402
+import fpsearch           # noqa: E402
+
+# The fingerprint model is trained locally and shipped, not fitted here: training
+# takes 57 minutes on 1.88M spectra and would nearly double a kernel that already
+# spends an hour rebuilding the index. The shipped model excluded the 3,060 held-out
+# spectra used for local scoring, which is 0.16% of the training data.
+fingerprint.MODEL = f"{CODE}/fpmodel.pt"
 
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)
@@ -77,8 +85,8 @@ del ix
 analog.build()
 step("fingerprints and exact masses built")
 
-analog.submit("/kaggle/working/submission.csv")
-step("submission written")
+fpsearch.submit("/kaggle/working/submission.csv")
+step(f"submission written (gamma={fpsearch.GAMMA:g})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")
