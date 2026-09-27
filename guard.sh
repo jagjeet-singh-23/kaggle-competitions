@@ -8,6 +8,10 @@
 # Exits 137 if it had to kill, otherwise the child's own status.
 : "${MIN_AVAIL_MB:=2000}"
 : "${GUARD_POLL:=2}"
+# Consecutive readings below the threshold before killing. Loading a model can dip
+# free memory for a second or two without the job's steady state being anywhere near
+# the limit -- a single sample killed a legitimate extraction run.
+: "${GUARD_STRIKES:=3}"
 
 avail_mb() {
     if [ "$(uname)" = "Darwin" ]; then
@@ -27,13 +31,20 @@ avail_mb() {
 
 "$@" &
 pid=$!
+strikes=0
 while kill -0 "$pid" 2>/dev/null; do
     a=$(avail_mb)
     if [ "${a:-999999}" -lt "$MIN_AVAIL_MB" ]; then
-        echo "guard: ${a}MB available < ${MIN_AVAIL_MB}MB, killing $pid" >&2
-        kill -9 "$pid" 2>/dev/null
-        wait "$pid" 2>/dev/null
-        exit 137
+        strikes=$((strikes + 1))
+        echo "guard: ${a}MB available < ${MIN_AVAIL_MB}MB (${strikes}/${GUARD_STRIKES})" >&2
+        if [ "$strikes" -ge "$GUARD_STRIKES" ]; then
+            echo "guard: killing $pid" >&2
+            kill -9 "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            exit 137
+        fi
+    else
+        strikes=0
     fi
     sleep "$GUARD_POLL"
 done
