@@ -78,7 +78,7 @@ net = BirdNET(batch=16)
 
 # ---- training data: the only labelled in-domain audio in the competition ----------
 lab = segments()
-L, E, rows = [], [], []
+L, E, rows, lab_files, lab_starts = [], [], [], [], []
 for fn, grp in lab.groupby("filename", sort=False):
     y, _ = sf.read(f"{COMP}/train_soundscapes/{fn}", dtype="float32")
     starts = grp.start_s.tolist()
@@ -86,6 +86,8 @@ for fn, grp in lab.groupby("filename", sort=False):
     L.append(lo)
     E.append(em)
     rows += list(grp.primary_label.astype(str))
+    lab_files += [fn] * len(starts)
+    lab_starts += starts
 Ltr, Etr = np.concatenate(L), np.concatenate(E)
 Y = np.zeros((len(rows), len(classes)), np.float32)
 for i, lbl in enumerate(rows):
@@ -137,6 +139,47 @@ assert sources["constant"] == 0, f"{sources['constant']} classes would emit 0.5"
 
 rank = lambda v: np.argsort(np.argsort(v)) / max(1, len(v) - 1)
 
+SMOOTH_K = 6         # +/- windows of context; 12-window recordings make this the file
+SMOOTH_ALPHA = 0.2   # weight kept on the window's own evidence
+
+
+def smooth(P, files, starts):
+    """Blend each window's scores with the strongest score nearby in the same file.
+
+    A soundscape is continuous and a bird calling at t=10s is usually still there at
+    t=15s, so the windows of one recording are not independent problems -- which is
+    how every earlier version of this kernel treated them. Worth +0.0156 locally, the
+    largest single gain since the cold-start heads.
+
+    Part of that is a per-recording prior rather than acoustic continuity: 48.6% of
+    (file, class) pairs are labelled across all 12 windows. That is still legitimate
+    here, because the metric ranks every test row against every other, so knowing a
+    species is present in this recording is most of the signal.
+
+    Files are handled separately and the row order is restored, so this never mixes
+    two recordings and never assumes sorted input.
+    """
+    r = lambda M: np.argsort(np.argsort(M, axis=0), axis=0) / max(1, len(M) - 1)
+    Pr = r(P)
+    ctx = np.empty_like(Pr)
+    order = np.lexsort((starts, files))
+    for f in np.unique(files):
+        idx = order[files[order] == f]
+        Q, n = Pr[idx], len(idx)
+        acc = []
+        for off in range(-SMOOTH_K, SMOOTH_K + 1):
+            # Counted explicitly: when a file is shorter than the window, a computed
+            # end index goes negative and numpy reads it as "from the end".
+            src = max(0, off)
+            cnt = max(0, min(n, n + off) - src)
+            pad = np.full_like(Q, np.nan)
+            if cnt:
+                dst = max(0, -off)
+                pad[dst:dst + cnt] = Q[src:src + cnt]
+            acc.append(pad)
+        ctx[idx] = np.nanmax(np.stack(acc), 0)
+    return SMOOTH_ALPHA * Pr + (1 - SMOOTH_ALPHA) * r(ctx)
+
 
 def predict(L, E):
     """(logits, embeddings) -> (n, 234) scores. Every class gets a real prediction."""
@@ -168,15 +211,17 @@ if not files:
     # labelled embeddings anyway -- otherwise the scored rerun would be the first
     # time this code path ever ran, which is how a submission gets wasted.
     P = predict(Ltr, Etr)
+    S = smooth(P, np.array(lab_files), np.array(lab_starts))
     assert P.shape == (len(Etr), len(classes)) and np.isfinite(P).all()
+    assert S.shape == P.shape and np.isfinite(S).all()
     assert not np.allclose(P.std(axis=0), 0), "every column constant"
-    step(f"smoke test on {len(Etr)} labelled segments passed: {P.shape}")
+    step(f"smoke test on {len(Etr)} labelled segments passed, smoothing ok: {P.shape}")
     sub = pd.read_csv(f"{COMP}/sample_submission.csv")
     sub.to_csv("/kaggle/working/submission.csv", index=False)
     step(f"no test audio; wrote sample_submission ({len(sub)} rows)")
     sys.exit(0)
 
-row_ids, Lte, Ete = [], [], []
+row_ids, Lte, Ete, te_files, te_starts = [], [], [], [], []
 for n, fn in enumerate(files):
     y, _ = sf.read(f"{test_dir}/{fn}", dtype="float32")
     if y.ndim > 1:
@@ -189,12 +234,15 @@ for n, fn in enumerate(files):
     Lte.append(lo)
     Ete.append(em)
     row_ids += [f"{stem}_{s + WIN}" for s in starts]
+    te_files += [stem] * len(starts)
+    te_starts += starts
     if n % 25 == 0:
         step(f"  {n}/{len(files)} files, {len(row_ids)} windows")
 Lte, Ete = np.concatenate(Lte), np.concatenate(Ete)
 step(f"embedded {len(row_ids):,} windows")
 
-P = predict(Lte, Ete)
+P = smooth(predict(Lte, Ete), np.array(te_files), np.array(te_starts))
+step("applied temporal smoothing")
 sub = pd.DataFrame(P, columns=classes)
 sub.insert(0, "row_id", row_ids)
 sub.to_csv("/kaggle/working/submission.csv", index=False)
