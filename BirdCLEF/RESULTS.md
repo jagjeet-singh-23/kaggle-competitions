@@ -4,8 +4,10 @@ Identifying 234 species from 5-second windows of passive acoustic monitoring in 
 Brazilian Pantanal. Metric is macro-averaged ROC-AUC over classes with at least one
 true positive. Competition closed June 2026; winner 0.96574.
 
-**Best local score: 0.8881**, from a linear head on frozen BirdNET embeddings blended
-with BirdNET's own logits on the species it already knows.
+**Private leaderboard 0.87008**, from a linear head on frozen BirdNET embeddings,
+blended with BirdNET's own logits on the species it knows, cold-start heads on focal
+audio for the 30 classes that have neither, and temporal smoothing across the windows
+of each recording.
 
 All numbers below are 5-fold cross-validation over the 739 labelled soundscape
 segments, grouped by recording file. Nothing here has been submitted.
@@ -337,7 +339,60 @@ the frozen encoder **different audio** — mixing focal calls into soundscape
 backgrounds produces genuinely new embedding vectors, and is directly motivated by
 section 5's finding that focal audio fails on domain rather than on content.
 
-## 11. Where this stands and what is next
+## 11. Temporal smoothing: the first gain since the cold-start heads
+
+Everything in sections 5, 9 and 10 attacked the features. This does not touch them.
+A soundscape is continuous, so the 12 windows of a recording are not 12 independent
+problems — which is how every earlier version of this kernel treated them.
+
+Each window's scores are blended with the strongest score nearby in the same file:
+
+```
+score = 0.2 * own + 0.8 * max over +/-6 windows of the same recording
+```
+
+| | local CV |
+|---|---|
+| no smoothing | 0.8774 |
+| k=6, max, alpha=0.2 | **0.8930** |
+
+All 24 swept configurations beat the baseline, with a monotone structure — larger k
+better, max over mean, lower alpha better — plateauing at k=6, which for a 12-window
+recording is the whole file.
+
+**A suspicious result, checked.** alpha=0 — discarding the window's own prediction
+entirely — scores 0.8926, almost the best. That suggests the labels might simply be
+file-level, in which case this exploits the annotation scheme rather than acoustics.
+Measured: of the 370 (file, class) pairs where a class appears at all, **48.6% are
+labelled across all 12 windows** and 51.4% vary, with the class on in 45% of windows
+where it does. So it is half prior and half acoustics. It is still legitimate and
+transferable — the metric ranks every test row against every other, so knowing a
+species is present in a recording is most of the available signal, and the test set
+is annotated by the same process.
+
+The sweep also found a real bug: for a file shorter than the smoothing window, a
+computed end index goes negative and numpy reads it as an offset from the end rather
+than an empty slice. It crashed at k=3. The self-check now covers one- and two-row
+files at every k.
+
+### Submitted
+
+| | public | private | gain (private) | predicted |
+|---|---|---|---|---|
+| v1 head + zero-shot | 0.83593 | 0.83575 | — | — |
+| v3 + cold-start heads | 0.86983 | 0.85710 | +0.02135 | +0.0306 |
+| **v4 + smoothing** | **0.88572** | **0.87008** | **+0.01298** | +0.0156 |
+
+**0.83575 → 0.87008, +0.0343 in total.**
+
+The prediction was well calibrated this time — +0.0156 locally against +0.0159 public
+and +0.0130 private — where the cold-start prediction over-shot private by 30%. The
+difference is the instrument. Smoothing was measured directly on the scored classes
+with real labels; the cold-start gain was estimated on a 19-class proxy standing in
+for 30 classes that cannot be validated at all. Proxy cohorts predict the direction
+but not the magnitude.
+
+## 12. Where this stands and what is next
 
 Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
 inference kernel yet, and the competition's binding constraint is a CPU-only notebook
@@ -353,7 +408,7 @@ Ranked by expected value, with the arithmetic from section 7:
    about +0.004, and weakly supported.** The in-domain data is real but a linear
    probe on frozen features cannot extract much more from it than BirdNET already
    provides. This is an argument for fine-tuning, not against the data.
-3. **Energy-based window selection.** `starts_for()` spreads windows uniformly; 12% of
+2. **Energy-based window selection.** `starts_for()` spreads windows uniformly; 12% of
    clips run past a minute with the call anywhere in them. This is the most likely
    source of label noise in the focal set — and worth retrying section 5 after fixing,
    since a cleaner focal set is the one thing that might change that result.
@@ -361,7 +416,7 @@ Ranked by expected value, with the arithmetic from section 7:
    model ships as inference-only `.tflite`, upstream publishes no bare trainable
    checkpoint, and there is no GPU or TensorFlow here.
 
-## 12. Files
+## 13. Files
 
 ```
 birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding
