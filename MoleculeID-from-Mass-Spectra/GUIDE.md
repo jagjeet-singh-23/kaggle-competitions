@@ -371,7 +371,14 @@ Isme kaam:
 - Fingerprint choice: Morgan (ECFP4) counts, MACCS, ya CSI-style substructure set
 - Encoder: spectrum ko set-of-peaks samjho → Transformer/Set-Transformer over (m/z, intensity, CE) tokens. Neighbouring-peak-differences (neutral losses) as extra channel bahut madad karti hai
 - Ye GPU-heavy training hai, par **inference CPU pe chal sakta hai**. Training tum kahin bhi karo, weights Kaggle Dataset me upload.
-- Forum me thread hai: *"External structure databases for Class 2 retrieval: is a formula-filtered PubChem subset prize-eligible"* — rules clarify karke hi mehnat lagao.
+- **Rules check kar liya (27 Sep 2026), jawab haan hai.** Section 2.6 EXTERNAL DATA AND
+  TOOLS: *"You may use data other than the Competition Data... publicly available and
+  equally accessible to use by all Participants... at no cost"* aur *"The use of
+  external data and models is acceptable unless specifically prohibited by the Host."*
+  PubChem/COCONUT free aur public hain, toh formula-filtered subset allowed aur
+  prize-eligible hai. Section 2.5 alag se kehta hai ki incompatible-license wale
+  external data/pretrained models pe open-source license dena zaroori nahi.
+  Internet kernel me band hai, toh database Kaggle Dataset me pre-upload karna hoga.
 
 Dataset ready-made: `Samar Talwar` ne 139K harmonized MassBank spectra + fingerprints post kiye hain.
 
