@@ -215,7 +215,61 @@ For scale, the leader is at 0.425. Assuming they also solve class 1 at ~0.94, th
 doing structure elucidation. That is the whole competition, and it is the thing this
 codebase does not yet do at all.
 
-## 8. What is next
+## 8. Class 3 is coverage-limited, and the held-out split cannot see it
+
+Four submissions, each a controlled change:
+
+| | change | public LB |
+|---|---|---|
+| v1 | library search only | 0.140 |
+| v2 | + analog propagation, fingerprint scoring | 0.158 |
+| v3 | + COCONUT candidate pool | 0.199 |
+| v4 | + mass-defect features, hidden 2048 | **0.213** |
+
+The first two have no class-3 capability at all, which pins the class mix exactly:
+**class 1 14.0%, class 2 12.6%, class 3 73.5%.**
+
+The v4 gain decomposes cleanly, and the decomposition is the finding:
+
+| | held-out delta | share | LB contribution |
+|---|---|---|---|
+| class 1 | +0.0115 | 14.0% | +0.0016 |
+| class 2 | +0.1026 | 12.6% | +0.0129 |
+| class 3 | +0.0071 | 73.5% | **−0.0005** |
+| | | | total +0.0140 (actual +0.0140) |
+
+Class 2 paid for all of it. Solving each submission for the *real* class-3 MRR shows
+it did not move: **0.0617 → 0.0610**, while the held-out split reported +0.0071.
+
+So the split misleads about class 3 in both directions. It understates the level (by
+2.8x at v3, 2.1x at v4) and it reports improvements that do not exist.
+
+The reason is that real class 3 is **coverage-limited, not ranking-limited**. A better
+fingerprint cannot find a molecule that is not in the candidate pool at all. Our
+proxy class 3 is partly a ranking problem, because the 8% COCONUT covers are in the
+pool and rank better with a better model — reality has no such headroom.
+
+Backing out the numbers: held-out class 3 is 0.0288 spread over 8% coverage, so
+ranking quality among molecules that *are* in the pool is **0.360**. Applying that to
+the real class-3 MRR of 0.0610 implies COCONUT covers about **17%** of the real test's
+class 3, against 8% of our proxy — the real test is more natural-product-like, which
+is what COCONUT indexes.
+
+That turns the remaining work into arithmetic:
+
+| candidate coverage | class 3 | predicted LB |
+|---|---|---|
+| 17% (now) | 0.061 | 0.213 |
+| 25% | 0.090 | 0.234 |
+| 40% | 0.144 | 0.274 |
+| 60% | 0.216 | 0.327 |
+
+The leader at 0.425 needs class-3 MRR around 0.217, which at this ranking quality is
+**60% coverage**. Model work cannot get there: it only touches class 1 and class 2,
+which are 26.5% of the metric between them. Database coverage is the only lever that
+moves the other 73.5%.
+
+## 9. What is next
 
 Ranked by expected value:
 
@@ -236,7 +290,7 @@ Ranked by expected value:
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
    an `[M+H]+` reference on equal terms.
 
-## 9. Files
+## 10. Files
 
 ```
 metric.py     MRR@25 exactly as scored; self-checks against the rules' examples

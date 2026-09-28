@@ -94,7 +94,7 @@ candidates per molecule.
 
 | | |
 |---|---|
-| Public LB | **0.140** |
+| Public LB | **0.213** |
 | Leader | 0.425 |
 | Metric | MRR@25, matched on InChIKey14 after RDKit tautomer canonicalisation |
 | Constraint | kernels-only, 9 h, no internet |
@@ -143,6 +143,12 @@ Three findings worth the click:
   `train.parquet` by matching `(precursor_mz, adduct, num_peaks)` — it is entirely
   class 1, while the hidden test is a mix of all three. Tuning against that number is
   tuning against a set that does not contain the problem.
+- **Class 3 is 73.5% of the test, and it is coverage-limited.** Four submissions with
+  known per-class scores solve the class mix exactly. Better features lifted class 2
+  by 43% relative and moved the real class 3 by nothing at all (0.0617 → 0.0610) —
+  a better fingerprint cannot find a molecule that is not in the candidate pool.
+  Backing coverage out of the numbers: the public database reaches ~17% of the real
+  class 3, and matching the leader would need ~60%.
 - **A 0.5% key mismatch was leaking the split.** The dataset ships an `inchikey14`
   column; the metric scores on the key RDKit derives from the SMILES. They disagree on
   amide/imide tautomers, so structures held out by dataset key stayed reachable, and
