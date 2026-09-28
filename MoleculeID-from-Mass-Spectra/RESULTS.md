@@ -249,27 +249,100 @@ fingerprint cannot find a molecule that is not in the candidate pool at all. Our
 proxy class 3 is partly a ranking problem, because the 8% COCONUT covers are in the
 pool and rank better with a better model — reality has no such headroom.
 
-Backing out the numbers: held-out class 3 is 0.0288 spread over 8% coverage, so
-ranking quality among molecules that *are* in the pool is **0.360**. Applying that to
-the real class-3 MRR of 0.0610 implies COCONUT covers about **17%** of the real test's
-class 3, against 8% of our proxy — the real test is more natural-product-like, which
-is what COCONUT indexes.
+Backing out the numbers needs the ranking quality among molecules that *are* in the
+pool. The obvious estimate — held-out class 3 divided by its coverage, 0.0288/0.08 —
+is computed from the 16 molecules of 200 that COCONUT happens to hold, and it is
+worthless at that sample size. Measuring it properly is section 9.
 
-That turns the remaining work into arithmetic:
+Either way the shape of the problem is fixed: model work only touches class 1 and
+class 2, which are 26.5% of the metric between them. Database coverage is the only
+lever that moves the other 73.5%.
 
-| candidate coverage | class 3 | predicted LB |
+## 9. Separating coverage from dilution
+
+A bigger database buys coverage and costs dilution — more candidates competing for 25
+slots. Both are measurable without downloading anything, by subsampling the COCONUT
+pool to a fraction f: coverage falls to about f while the pool shrinks by the same
+factor, so sweeping f traces the two curves at once (`dilute.py`).
+
+The ordinary split reads coverage straight off the sweep, and it is linear:
+
+| f | median pool | class 3 covered | class 1 | class 2 | class 3 |
+|---|---|---|---|---|---|
+| 0 | 115 | 0.0% | 0.8836 | 0.4050 | 0.0000 |
+| 0.25 | 148 | 2.5% | 0.8696 | 0.3980 | 0.0123 |
+| 0.5 | 170 | 5.0% | 0.8638 | 0.3907 | 0.0199 |
+| 1 | 217 | 8.0% | 0.8512 | 0.3859 | 0.0293 |
+
+But ranking quality still lands on 16 molecules at f=1 and fewer below, so the same
+sweep on a **split whose class 3 is drawn only from structures COCONUT already has**
+— coverage 100% by construction, so class-3 MRR *is* the ranking quality, on 200
+molecules instead of 16:
+
+| f | median pool | class 3 covered | class 1 | class 2 | quality |
+|---|---|---|---|---|---|
+| 0.125 | 91 | 13.0% | 0.8874 | 0.4930 | 0.556 |
+| 0.25 | 108 | 25.5% | 0.8867 | 0.4888 | 0.596 |
+| 0.5 | 141 | 51.5% | 0.8812 | 0.4860 | 0.539 |
+| 1 | 203 | 100.0% | 0.8678 | 0.4765 | **0.492** |
+
+**Ranking quality is 0.492, not the 0.360 the 16-molecule estimate gave.** That moves
+the implied real coverage from 17% down to 0.0610/0.492 = **12.4%**.
+
+Subsampling can only shrink the pool, so it measures dilution over one doubling where
+an expansion needs six. Widening the neutral-mass window instead adds candidates
+without removing the answer, and reaches pool sizes a real expansion would produce.
+Those candidates have the wrong mass, which nothing in the ranking looks at — every
+term scores a structure, not its mass — so they compete on the same footing:
+
+| ppm | median pool | class 1 | class 2 | quality |
+|---|---|---|---|---|
+| 5 | 203 | 0.8678 | 0.4765 | 0.4917 |
+| 20 | 606 | 0.8584 | 0.4292 | 0.5117 |
+| 80 | 2393 | 0.8344 | 0.3446 | 0.4769 |
+| 160 | 4711 | 0.8241 | 0.3163 | 0.4561 |
+
+**A 23x pool costs class 3 fifteen thousandths.** Ranking quality is −0.011 per
+doubling; class 1 is −0.010 and class 2 is −0.037. Class 3 is nearly immune to pool
+size, because the predicted fingerprint separates the right structure from arbitrary
+ones sharply, while class 2 rides on analog propagation and a wider pool is exactly
+more structures competing to be somebody's analog.
+
+That last number is measured under window widening, which grows the index side of the
+pool too. A database expansion grows only the external side, and the subsample sweep
+puts that at −0.012 per doubling for class 2 and −0.018 for class 1.
+
+Protecting class 2 by denying external structures the analog term (`PROP_INTERNAL=1`)
+does not pay: class 2 gained 0.005 and class 3 lost 0.017, which at the solved class
+mix is −0.0105 of leaderboard.
+
+So the arithmetic for an expansion of m times the current pool:
+
+```
+class 1  0.804 - 0.018*log2(m)         real values, solved from the leaderboard
+class 2  0.442 - 0.012*log2(m)
+quality  0.492 - 0.011*log2(m)
+LB       0.140*class1 + 0.126*class2 + 0.735*coverage*quality
+```
+
+At m = 84 (PubChem after filtering, ~60M structures) the dilution costs 0.026 of
+leaderboard and quality falls to 0.422. **Coverage only has to reach 22.7% to break
+even**, against 12.4% today:
+
+| real class 3 coverage | class 3 | predicted LB |
 |---|---|---|
-| 17% (now) | 0.061 | 0.213 |
-| 25% | 0.090 | 0.234 |
-| 40% | 0.144 | 0.274 |
-| 60% | 0.216 | 0.327 |
+| 12.4% (now, COCONUT) | 0.061 | 0.213 |
+| 22.7% | 0.096 | 0.213 — breakeven |
+| 50% | 0.211 | 0.298 |
+| 70% | 0.295 | 0.360 |
+| 100% | 0.422 | 0.453 |
 
-The leader at 0.425 needs class-3 MRR around 0.217, which at this ranking quality is
-**60% coverage**. Model work cannot get there: it only touches class 1 and class 2,
-which are 26.5% of the metric between them. Database coverage is the only lever that
-moves the other 73.5%.
+A REST probe of all 200 held-out class-3 skeletons found **88.7% of them in PubChem**
+against COCONUT's 8.0%. Those molecules all have reference spectra somewhere, so they
+are known compounds and the real figure will be lower — but breakeven needs the
+coverage multiplier to be 1.8x and the probe says 11x.
 
-## 9. What is next
+## 10. What is next
 
 Ranked by expected value:
 
@@ -290,7 +363,7 @@ Ranked by expected value:
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
    an `[M+H]+` reference on equal terms.
 
-## 10. Files
+## 11. Files
 
 ```
 metric.py     MRR@25 exactly as scored; self-checks against the rules' examples

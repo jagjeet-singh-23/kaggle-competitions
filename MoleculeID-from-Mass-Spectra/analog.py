@@ -40,6 +40,7 @@ FP_BITS = 2048
 MASS_PPM = 5.0       # neutral-mass window; swept, with a clear optimum at 5
 N_SEEDS = 1          # analog seeds; more seeds only dilute (see RESULTS.md)
 BETA = 1.0           # weight on the analog term
+PROP_INTERNAL = os.environ.get("PROP_INTERNAL", "0") == "1"
 TOP_K = 25
 
 # m/z = M + shift, for the ten adducts the hidden test uses. Monoisotopic, with the
@@ -114,15 +115,25 @@ class Analog:
                 import external as ext_db
                 e = ext_db.load()
                 new = ~np.isin(e["key"], key)
+                # EXT_FRAC subsamples the external structures. A random fraction f
+                # cuts coverage to ~f while cutting the pool by the same factor, so
+                # sweeping it separates "more candidates found" from "more candidates
+                # competing" -- the two halves of what a bigger database does.
+                frac = float(os.environ.get("EXT_FRAC", 1.0))
+                if frac < 1.0:
+                    rng = np.random.default_rng(0)
+                    new &= rng.random(len(new)) < frac
                 key = np.concatenate([key, e["key"][new]])
                 smiles = np.concatenate([smiles, e["smiles"][new].astype(smiles.dtype)])
                 mass = np.concatenate([mass, e["mass"][new]])
                 fp = np.concatenate([fp, e["fp"][new]])
                 self.external_n = int(new.sum())
                 print(f"external pool: +{self.external_n:,} structures")
+                self.n_internal = len(key) - self.external_n
             except AssertionError:
                 pass
         self.external_n = getattr(self, "external_n", 0)
+        self.n_internal = getattr(self, "n_internal", len(key))
         self.key, self.smiles, self.mass, self.fp = key, smiles, mass, fp
         self.order = np.argsort(mass, kind="stable")
         self.msorted = mass[self.order]
@@ -163,6 +174,15 @@ class Analog:
         in a dense neighbourhood of decent matches rather than next to one good one.
         """
         rows = self.pool(precursor, adducts, ppm)
+        if PROP_INTERNAL:
+            # Analog propagation is what class 2 lives on, and it is the one term
+            # that a bigger database degrades: widening the pool 23x cost class 2
+            # 0.037 per doubling while class 3 lost 0.011. An external structure can
+            # take analog score off a seed but rarely deserves it -- it has no
+            # spectra anywhere, so nothing vouches for its neighbourhood. Class 3
+            # does not need this term either: it is reached by the predicted
+            # fingerprint, which scores the full pool in fpsearch regardless.
+            rows = rows[rows < self.n_internal]
         if stat is not None:
             stat.append(len(rows))
         if not len(rows) or not spec:
@@ -308,6 +328,7 @@ def selftest():
     an.msorted = mass[an.order]
     an.row = {k: i for i, k in enumerate(key)}
     an.popc = np.bitwise_count(fp).sum(1).astype(np.int32)
+    an.n_internal = len(key)      # nothing external in the fixture
 
     # Aspirin is 180.0423; [M+H]+ puts it at 181.0495.
     got = an.pool(180.0423 + PROTON, ["[M+H]+"])
@@ -336,6 +357,7 @@ def selftest():
     banned.msorted = banned.mass[banned.order]
     banned.row = {k: i for i, k in enumerate(banned.key)}
     banned.popc = np.bitwise_count(banned.fp).sum(1).astype(np.int32)
+    banned.n_internal = len(banned.key)
     assert key[0] not in banned.propagate({key[1]: 1.0}, 180.0423 + PROTON, ["[M+H]+"])
     print("analog self-checks passed")
 

@@ -79,7 +79,7 @@ fingerprint.MODEL = f"{CODE}/fpmodel.pt"
 # once weighted by the real mix. Rules section 2.6 permits external data that is
 # publicly available, free and equally accessible.
 import external          # noqa: E402
-external.OUT = find("shard_000.npz", "/kaggle/input/datasets")
+external.OUT = find("shard_000.npz")   # default root: Kaggle moves dataset mounts around
 
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)

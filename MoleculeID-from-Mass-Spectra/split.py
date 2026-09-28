@@ -31,7 +31,13 @@ from library import WORK
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 SHARDS = f"{WORK}/index"
-OUT = f"{WORK}/splits.npz"
+OUT = os.environ.get("SPLIT_OUT", f"{WORK}/splits.npz")
+# C3_COVERED draws class 3 only from structures the external database already
+# has. Coverage is then 100% by construction, so a measurement on that split is
+# ranking quality alone -- on 200 molecules instead of the 16 that happen to be
+# covered in the ordinary split. Separating the two is the whole question for a
+# database expansion: coverage is what it buys, dilution is what it costs.
+C3_COVERED = os.environ.get("C3_COVERED") == "1"
 
 N_PER_CLASS = 200        # held-out structures per novelty class
 MAX_SPECTRA = 4          # queries per molecule; the real test has median 3
@@ -79,8 +85,17 @@ def build(seed=0):
     pick = lambda pool, k: rng.choice(pool, min(k, len(pool)), replace=False)
     c1 = pick(multi, N_PER_CLASS)
     rest = np.setdiff1d(np.r_[multi, single], c1)
-    c23 = pick(rest, 2 * N_PER_CLASS)
-    c2, c3 = c23[:N_PER_CLASS], c23[N_PER_CLASS:]
+    if C3_COVERED:
+        import external
+        ext = external.load()["key"]
+        covered = rest[np.isin(uniq[rest], ext)]
+        print(f"{len(covered):,} of {len(rest):,} candidate structures are in the "
+              f"external database")
+        c3 = pick(covered, N_PER_CLASS)
+        c2 = pick(np.setdiff1d(rest, c3), N_PER_CLASS)
+    else:
+        c23 = pick(rest, 2 * N_PER_CLASS)
+        c2, c3 = c23[:N_PER_CLASS], c23[N_PER_CLASS:]
 
     query, qclass, qkey, drop = [], [], [], []
     for cls, sel in ((1, c1), (2, c2), (3, c3)):
