@@ -33,3 +33,8 @@ MoleculeID-from-Mass-Spectra/kernel/code/
 BirdCLEF/kernel/code/
 BirdCLEF/kernel/wheels/
 MoleculeID-from-Mass-Spectra/kernel/wheels/
+
+# Candidate-pool shards staged for upload as Kaggle datasets. COCONUT is 260 MB and
+# PubChem is several GB; both are rebuildable from external.py / pubchem.py.
+MoleculeID-from-Mass-Spectra/kernel/extdb/
+MoleculeID-from-Mass-Spectra/kernel/pubchemdb/
