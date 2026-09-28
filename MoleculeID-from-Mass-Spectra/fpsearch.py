@@ -72,9 +72,12 @@ def query_fp(model, spectra):
 def main():
     sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
     ix = library.load()
-    se = Searcher(drop=sp["drop"], banned=sp["banned"])
+    se = Searcher(drop=sp["drop"], banned=sp["banned"], ix=ix)
     an = Analog(banned=sp["banned"])
     model, bits = load_model()
+    import resource
+    rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * library._RSS_UNIT / 2**30
+    print(f"peak RSS after loading index, pool and model: {rss():.2f} GB", flush=True)
 
     # Candidate fingerprints stay packed. Unpacking all 264,127 of them to float32
     # over the 1,575 predicted bits is 1.66 GB, which the memory guard killed; the
@@ -157,7 +160,9 @@ def submit(path=None, gamma=GAMMA):
 
     path = path or f"{DIR}/submission.csv"
     te = pd.read_parquet(f"{DATA}/test.parquet")
-    se, an = Searcher(), Analog()
+    ix = library.load()
+    se, an = Searcher(ix=ix), Analog()
+    del ix
     model, bits = load_model()
     rows = []
     for mid, g in te.groupby("molecule_id"):

@@ -42,8 +42,14 @@ class Searcher:
     different precursor mass cannot be the same molecule.
     """
 
-    def __init__(self, drop=None, banned=None):
-        ix = library.load()
+    def __init__(self, drop=None, banned=None, ix=None):
+        """`ix` lets a caller hand in an index it has already loaded.
+
+        Without it, a caller that needs the unmasked index as well pays for two full
+        copies -- 1.3 GB each -- on top of this object's own masked copy and the
+        derived float32/int32 arrays. That peak is what took the machine down once.
+        """
+        ix = library.load() if ix is None else ix
         n = len(ix["npk"])
         mask = np.ones(n, bool)
         if drop is not None:
@@ -51,7 +57,6 @@ class Searcher:
         if banned is not None and len(banned):
             mask &= ~np.isin(ix["inchikey14"], np.asarray(banned))
         self.ix = {k: v[mask] for k, v in ix.items()}
-        del ix
 
         p = self.ix["precursor"]
         self.order = np.argsort(p, kind="stable")
