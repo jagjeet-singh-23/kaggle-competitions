@@ -180,18 +180,26 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
             l.backward()
             opt.step()
             tot += l.item() * len(b)
+        # Checkpoint every epoch. A six-epoch run is two and a half hours and the
+        # memory guard killed one at epoch five, losing all of it because the only
+        # save was after the loop. One epoch is the most a kill should ever cost.
+        save(model, bits)
         if not quiet:
             print(f"  epoch {ep + 1}/{epochs}  loss {tot / len(order):.4f}  "
                   f"tanimoto {'/'.join(f'{x:.4f}' for x in evaluate(model, mz, it, pm, rows, fp, bits, va))}"
-                  f" (model/shuffled/mean-fp)  {(time.time() - t0) / 60:.1f} min", flush=True)
-    # The architecture travels with the weights. Without this, a checkpoint trained
-    # with different features or width cannot be reloaded -- load_model would build
-    # the default shape and fail on the state dict.
-    torch.save({"state": model.state_dict(), "bits": bits,
-                "defect": DEFECT, "hidden": HIDDEN, "bin": BIN}, MODEL)
+                  f" (model/shuffled/mean-fp)  {(time.time() - t0) / 60:.1f} min  "
+                  f"[saved]", flush=True)
     if not quiet:
         print(f"wrote {MODEL}")
     return model, bits
+
+
+def save(model, bits):
+    """The architecture travels with the weights. Without it, a checkpoint trained
+    with different features or width cannot be reloaded -- load_model would build the
+    default shape and fail on the state dict."""
+    torch.save({"state": model.state_dict(), "bits": bits,
+                "defect": DEFECT, "hidden": HIDDEN, "bin": BIN}, MODEL)
 
 
 def predict(model, mz, it, pm, batch=512):
