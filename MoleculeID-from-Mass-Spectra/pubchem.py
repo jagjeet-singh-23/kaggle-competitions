@@ -166,7 +166,7 @@ def build():
 
     def flush(shard, buf):
         if buf:
-            np.savez(f"{OUT}/shard_{shard:04d}.npz",
+            np.savez(f"{OUT}/shard_{shard:03d}.npz",
                      **{k: np.concatenate([b[i] for b in buf])
                         for i, k in enumerate(("key", "smiles", "mass", "fp"))})
 
