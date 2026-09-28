@@ -66,10 +66,10 @@ def _init():
 
 
 def _work(lines):
-    """One chunk of `CID<TAB>SMILES` lines -> (keys, smiles, masses, fps), n_seen."""
+    """One chunk of `CID<TAB>SMILES` lines -> (keys, smiles, masses, fps, np), n."""
     Chem, Desc, gen = _state["Chem"], _state["Desc"], _state["gen"]
     npscorer, fs = _state["npscorer"], _state["fs"]
-    K, S, M, F = [], [], [], []
+    K, S, M, F, P = [], [], [], [], []
     for ln in lines:
         t = ln.rstrip("\n").split("\t")
         if len(t) != 2:
@@ -85,7 +85,8 @@ def _work(lines):
         mass = Desc.ExactMolWt(m)
         if not MZ_LO <= mass <= MZ_HI:
             continue
-        if npscorer.scoreMol(m, fs) < NP_MIN:
+        np_ = npscorer.scoreMol(m, fs)
+        if np_ < NP_MIN:
             continue
         try:
             k = Chem.MolToInchiKey(m)[:14]
@@ -97,10 +98,12 @@ def _work(lines):
         S.append(smi.encode())
         M.append(mass)
         F.append(np.packbits(gen.GetFingerprintAsNumPy(m)))
+        P.append(np_)
     if not K:
         return None, len(lines)
     return (np.array(K, dtype="S14"), np.array(S, dtype=f"S{SMILES_MAX}"),
-            np.array(M, np.float64), np.stack(F)), len(lines)
+            np.array(M, np.float64), np.stack(F),
+            np.array(P, np.float32)), len(lines)
 
 
 def _chunks(f, n=CHUNK, stride=1):
@@ -144,11 +147,13 @@ def pilot(n=2_000_000, stride=53):
     order, so the first few million are classic small molecules and would make a
     natural-product filter look far more generous than it is.
     """
-    kept = sum(len(K) for K, *_ in _stream(stride=stride, limit=n))
-    frac = kept / n
-    print(f"\nNP_MIN={NP_MIN}  kept {kept:,} of {n:,} sampled ({frac:.2%})")
-    print(f"extrapolates to {int(frac * 119e6):,} structures, "
-          f"{frac * 119e6 * 460 / 1e9:.1f} GB held in memory")
+    nps = np.concatenate([r[4] for r in _stream(stride=stride, limit=n)])
+    print(f"\nNP_MIN={NP_MIN}: {len(nps):,} of {n:,} sampled pass the mass and "
+          f"fragment filters ({len(nps) / n:.2%})")
+    print(f"\n{'NP_MIN':>8}{'kept':>10}{'of PubChem':>14}{'in memory':>12}")
+    for t in (-3, -2, -1, 0, 0.5, 1.0, 1.5, 2.0, 2.5):
+        f = float((nps >= t).mean()) * len(nps) / n
+        print(f"{t:>8.1f}{f:>9.2%}{int(f * 119e6):>14,}{f * 119e6 * 460 / 1e9:>10.1f} GB")
 
 
 def build():
@@ -166,7 +171,7 @@ def build():
                         for i, k in enumerate(("key", "smiles", "mass", "fp"))})
 
     for res in _stream():
-        buf.append(res)
+        buf.append(res[:4])
         held += len(res[0])
         n += len(res[0])
         if held >= SHARD:
@@ -204,23 +209,20 @@ def dedupe():
           f"({off[-1] - int(mask.sum()):,} removed)")
 
 
-def load():
-    import glob
-    fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
-    assert fs, f"no shards in {OUT}; run `python3 pubchem.py --build` first"
-    parts = [np.load(f) for f in fs]
-    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
-
-
 def coverage():
-    ext = set(load()["key"].tolist())
+    # The shard layout is external.py's, so pointing that module at this directory is
+    # all it takes for analog.py to use PubChem instead of COCONUT:
+    #     CASMI_EXT=data/ext_pubchem python3 fpsearch.py
+    import external
+    external.OUT = OUT
+    ext = external.load()["key"]
     sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
     qkey, qclass = sp["qkey"], sp["qclass"]
     print(f"{len(ext):,} structures in the pool\n")
     for c in (1, 2, 3):
-        s = set(np.unique(qkey[qclass == c]).tolist())
-        hit = len(s & ext)
-        print(f"  class {c}: {hit:3d}/{len(s)} ({hit / len(s):5.1%}) reachable")
+        q = np.unique(qkey[qclass == c])
+        hit = int(np.isin(q, ext).sum())
+        print(f"  class {c}: {hit:3d}/{len(q)} ({hit / len(q):5.1%}) reachable")
     print("\nCOCONUT reached 8.0% of class 3; a REST probe of the same 200 skeletons "
           "found 87% of them somewhere in PubChem, so the gap between that and this "
           "number is what the mass and NP-likeness filters cost.")

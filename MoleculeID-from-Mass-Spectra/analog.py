@@ -93,6 +93,34 @@ def build():
           f"{int((mass < 0).sum())} unparseable)")
 
 
+class _Rows:
+    """key14 -> row index, without a Python dict over every structure.
+
+    A dict of 20M byte keys costs about 3 GB in object overhead alone, which is most
+    of what a PubChem-scale pool has to spare inside a 30 GB kernel. A sort order plus
+    searchsorted answers the same two questions -- `k in rows` and `rows[k]` -- for
+    eight bytes a row.
+    """
+
+    def __init__(self, key):
+        self.order = np.argsort(key, kind="stable")
+        self.sorted = key[self.order]
+
+    def _find(self, k):
+        i = np.searchsorted(self.sorted, k)
+        return (int(self.order[i])
+                if i < len(self.sorted) and self.sorted[i] == k else -1)
+
+    def __getitem__(self, k):
+        r = self._find(k)
+        if r < 0:
+            raise KeyError(k)
+        return r
+
+    def __contains__(self, k):
+        return self._find(k) >= 0
+
+
 class Analog:
     """Mass-windowed candidate pool plus Tanimoto scoring against spectral seeds."""
 
@@ -113,21 +141,25 @@ class Analog:
             # the faithful simulation rather than a leak.
             try:
                 import external as ext_db
-                e = ext_db.load()
-                new = ~np.isin(e["key"], key)
                 # EXT_FRAC subsamples the external structures. A random fraction f
                 # cuts coverage to ~f while cutting the pool by the same factor, so
                 # sweeping it separates "more candidates found" from "more candidates
                 # competing" -- the two halves of what a bigger database does.
                 frac = float(os.environ.get("EXT_FRAC", 1.0))
                 if frac < 1.0:
-                    rng = np.random.default_rng(0)
-                    new &= rng.random(len(new)) < frac
-                key = np.concatenate([key, e["key"][new]])
-                smiles = np.concatenate([smiles, e["smiles"][new].astype(smiles.dtype)])
-                mass = np.concatenate([mass, e["mass"][new]])
-                fp = np.concatenate([fp, e["fp"][new]])
-                self.external_n = int(new.sum())
+                    e = ext_db.load()
+                    new = ~np.isin(e["key"], key)
+                    new &= np.random.default_rng(0).random(len(new)) < frac
+                    key = np.concatenate([key, e["key"][new]])
+                    smiles = np.concatenate([smiles,
+                                             e["smiles"][new].astype(smiles.dtype)])
+                    mass = np.concatenate([mass, e["mass"][new]])
+                    fp = np.concatenate([fp, e["fp"][new]])
+                    n_new = int(new.sum())
+                    del e, new
+                else:
+                    key, smiles, mass, fp, n_new = ext_db.merge(key, smiles, mass, fp)
+                self.external_n = n_new
                 print(f"external pool: +{self.external_n:,} structures")
                 self.n_internal = len(key) - self.external_n
             except AssertionError:
@@ -137,8 +169,13 @@ class Analog:
         self.key, self.smiles, self.mass, self.fp = key, smiles, mass, fp
         self.order = np.argsort(mass, kind="stable")
         self.msorted = mass[self.order]
-        self.row = {k: i for i, k in enumerate(key)}
-        self.popc = np.bitwise_count(fp).sum(1).astype(np.int32)
+        self.row = _Rows(key)
+        # In one call this materialises a uint8 copy of the whole fingerprint block,
+        # 2.6 GB at PubChem scale. A million rows at a time costs nothing and peaks at
+        # 256 MB.
+        self.popc = np.empty(len(fp), np.int32)
+        for i in range(0, len(fp), 1_000_000):
+            self.popc[i:i + 1_000_000] = np.bitwise_count(fp[i:i + 1_000_000]).sum(1)
         print(f"analog pool: {len(key):,} structures")
 
     def pool(self, precursor, adducts, ppm=MASS_PPM):
@@ -326,7 +363,7 @@ def selftest():
     an.key, an.smiles, an.mass, an.fp = key, np.array(smis, dtype="S300"), mass, fp
     an.order = np.argsort(mass, kind="stable")
     an.msorted = mass[an.order]
-    an.row = {k: i for i, k in enumerate(key)}
+    an.row = _Rows(key)
     an.popc = np.bitwise_count(fp).sum(1).astype(np.int32)
     an.n_internal = len(key)      # nothing external in the fixture
 
@@ -355,7 +392,7 @@ def selftest():
     banned.smiles = np.array(smis, dtype="S300")[keep]
     banned.order = np.argsort(banned.mass, kind="stable")
     banned.msorted = banned.mass[banned.order]
-    banned.row = {k: i for i, k in enumerate(banned.key)}
+    banned.row = _Rows(banned.key)
     banned.popc = np.bitwise_count(banned.fp).sum(1).astype(np.int32)
     banned.n_internal = len(banned.key)
     assert key[0] not in banned.propagate({key[1]: 1.0}, 180.0423 + PROTON, ["[M+H]+"])

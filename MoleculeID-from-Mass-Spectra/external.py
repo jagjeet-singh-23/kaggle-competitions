@@ -128,11 +128,63 @@ def build():
 
 
 def load():
+    """Every shard as one dict of arrays, filling a preallocated result.
+
+    np.concatenate over the shard list would hold the parts and the result at once.
+    At COCONUT's 700k rows that is 0.7 GB and nobody notices; at PubChem's 10M it is
+    11 GB, and the machine has 15. Reading each shard into its slice and dropping it
+    keeps the peak at the result plus one shard.
+    """
     import glob
     fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
     assert fs, f"no shards in {OUT}; run `python3 external.py --build` first"
-    parts = [np.load(f) for f in fs]
-    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0].files}
+    sizes, out = [], None
+    for f in fs:                      # headers only: npz members are read lazily
+        with np.load(f) as d:
+            sizes.append(len(d["key"]))
+            if out is None:
+                spec = {k: (d[k].dtype, d[k].shape[1:]) for k in d.files}
+    n = sum(sizes)
+    out = {k: np.empty((n,) + sh, dt) for k, (dt, sh) in spec.items()}
+    at = 0
+    for f, m in zip(fs, sizes):
+        with np.load(f) as d:
+            for k in out:
+                out[k][at:at + m] = d[k]
+        at += m
+    return out
+
+
+def merge(key, smiles, mass, fp):
+    """Index arrays plus every external structure they do not already have.
+
+    load() then concatenate would hold the whole external pool and the merged result
+    at the same time -- 11 GB at PubChem scale, on a machine with 15. Counting the new
+    rows first and filling a preallocated result one shard at a time keeps the peak at
+    the result plus a single shard.
+    """
+    import glob
+    fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
+    assert fs, f"no shards in {OUT}"
+    masks = []
+    for f in fs:
+        with np.load(f) as d:
+            masks.append(~np.isin(d["key"], key))
+    n = len(key) + sum(int(m.sum()) for m in masks)
+    out = {"key": np.empty(n, key.dtype), "smiles": np.empty(n, smiles.dtype),
+           "mass": np.empty(n, mass.dtype), "fp": np.empty((n,) + fp.shape[1:], fp.dtype)}
+    for k, v in zip(out, (key, smiles, mass, fp)):
+        out[k][:len(key)] = v
+    at = len(key)
+    for f, m in zip(fs, masks):
+        c = int(m.sum())
+        if not c:
+            continue
+        with np.load(f) as d:
+            for k in out:
+                out[k][at:at + c] = d[k][m]
+        at += c
+    return out["key"], out["smiles"], out["mass"], out["fp"], n - len(key)
 
 
 def coverage():

@@ -73,7 +73,6 @@ def main():
     sp = np.load(f"{WORK}/splits.npz", allow_pickle=True)
     ix = library.load()
     se = Searcher(drop=sp["drop"], banned=sp["banned"], ix=ix)
-    an = Analog(banned=sp["banned"])
     model, bits = load_model()
     import resource
     rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * library._RSS_UNIT / 2**30
@@ -97,11 +96,15 @@ def main():
         add = pos if bool(ix["ion"][rows[0]]) else neg
         spec, smiles = se.score_structures(spectra)
         pm = float(spectra[0][2])
-        pool = an.pool(pm, add)
-        fpq = query_fp(model, spectra)
-        jobs.append((cls, k, spec, smiles, pm, add, pool, fpq))
+        jobs.append([cls, k, spec, smiles, pm, add, None, query_fp(model, spectra)])
         answers[cls][k] = ix["smiles"][rows[0]].decode()
+    # The index and the candidate pool are 1.3 GB and, at PubChem scale, 5 GB. Build
+    # the second only once the first is gone, and take the mass windows in a second
+    # pass, so the two are never resident together.
     del ix, se
+    an = Analog(banned=sp["banned"])
+    for j in jobs:
+        j[6] = an.pool(j[4], j[5])
     print(f"{len(jobs)} molecules, median pool {int(np.median([len(j[6]) for j in jobs]))}\n")
 
     print(f"{'gamma':<8}{'class1':>9}{'class2':>9}{'class3':>9}{'mean':>9}")
@@ -161,8 +164,9 @@ def submit(path=None, gamma=GAMMA):
     path = path or f"{DIR}/submission.csv"
     te = pd.read_parquet(f"{DATA}/test.parquet")
     ix = library.load()
-    se, an = Searcher(ix=ix), Analog()
-    del ix
+    se = Searcher(ix=ix)
+    del ix                       # Searcher keeps its own masked copy; see main()
+    an = Analog()
     model, bits = load_model()
     rows = []
     for mid, g in te.groupby("molecule_id"):
