@@ -344,24 +344,27 @@ coverage multiplier to be 1.8x and the probe says 11x.
 
 ## 10. What is next
 
-Ranked by expected value:
+Ranked by expected value, with the measurements that rank them:
 
-1. **Predict fingerprints from the spectrum.** This is no longer one option among
-   several — section 7 says classes 2 and 3 are ~87% of the metric and we score
-   0.0676 and 0.0000 on them. Analog propagation reaches class 2 only through a
-   structure that already has spectra, so it cannot score a candidate whose
-   neighbourhood the library never sampled. A spectrum-to-fingerprint model scores
-   every candidate in the mass window directly. Everything else on this list is worth
-   a fraction of what this is worth.
+1. **Candidate coverage, and nothing else comes close.** Class 3 is 73.5% of the
+   metric, it is coverage-limited rather than ranking-limited (section 8), and a pool
+   23x larger costs its ranking quality 0.011 per doubling (section 9). A public
+   database that holds 88.7% of the held-out class 3 skeletons, where the one in use
+   holds 8.0%, is the whole remaining problem. Everything below is worth a fraction of
+   this.
 2. **A reverse or hybrid cosine**, per section 4. The peak-count asymmetry is the
    clearest remaining mismatch between the data and the scoring function, and it caps
-   class 1 as well as class 2.
-3. **Class 3 needs de novo generation** and nothing short of it. It may be half the
-   hidden test (section 7) and is structurally unreachable by retrieval — the
-   assertion in `analog.py` exists to keep that honest.
-4. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
+   class 1 as well as class 2. Worth about 26.5% of the metric at most, which is what
+   classes 1 and 2 are between them.
+3. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
-   an `[M+H]+` reference on equal terms.
+   an `[M+H]+` reference on equal terms. Same 26.5% ceiling.
+
+De novo generation is off this list. Earlier versions of it said class 3 was
+"structurally unreachable by retrieval", which was an inference from a held-out split
+that bans the answer by construction, not a measurement. The leaderboard says real
+class 3 already scores 0.0610 by retrieval, and that the public databases hold most of
+it.
 
 ## 11. Files
 
@@ -370,8 +373,15 @@ metric.py     MRR@25 exactly as scored; self-checks against the rules' examples
 library.py    row-group-streamed index over train.parquet -> data/index/
               canonical_keys(): RDKit key14 per structure, cached
 split.py      held-out novelty split on canonical keys  -> data/splits.npz
+              C3_COVERED=1 draws class 3 from structures the external pool has
 search.py     Rung 1: precursor-windowed cosine search   0.9390 / 0      / 0
 analog.py     Rung 2: mass-windowed Tanimoto propagation 0.9420 / 0.0676 / 0
+fingerprint.py  spectrum -> Morgan bits; binned m/z, neutral loss, mass defect
+fpsearch.py   Rung 3: the three scores combined         0.8512 / 0.3859 / 0.0293
+external.py   COCONUT as a candidate source, sharded    +448k structures
+pubchem.py    PubChem as a candidate source; picks its NP-likeness threshold
+              from a strided sample to land on a row count
+dilute.py     coverage against dilution: subsample the pool, or widen the window
 ```
 
 Self-checks that need no competition data:
@@ -381,6 +391,7 @@ python3 metric.py              # metric vs the glucose example in the rules
 python3 library.py --selftest  # spectrum curation
 python3 analog.py --selftest   # mass windows, Tanimoto, and the class 3 ban
 python3 search.py --selftest   # search and aggregation on a synthetic index
+python3 fingerprint.py --selftest  # featuriser and a single-molecule overfit
 ```
 
 `metric.py` is the one to trust on a new machine: RDKit is pinned to 2026.3.3 because

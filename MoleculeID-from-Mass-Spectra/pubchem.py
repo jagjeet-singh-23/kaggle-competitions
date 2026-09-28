@@ -52,6 +52,11 @@ NP_MIN = float(os.environ.get("NP_MIN", -99.0))
 TARGET = int(os.environ.get("TARGET", 0))
 SHARD = 500_000
 NPROC = int(os.environ.get("NPROC", 8))
+# STRIDE builds from every Nth compound. The full scan is 119M parses and takes
+# hours on a four-core notebook; a stride of 3 keeps a third of the coverage for a
+# third of the time, which is still several times what COCONUT reaches. It is the
+# fallback if a full build runs into the 12-hour notebook limit.
+STRIDE = int(os.environ.get("STRIDE", 1))
 CHUNK = 50_000
 SMILES_MAX = 250          # storage width, and a free pre-filter on size
 
@@ -162,14 +167,14 @@ def sample(n=2_000_000, stride=53):
 def pick_threshold(target):
     """The NP_MIN that keeps about `target` structures out of all 119M."""
     nps, _, n = sample()
-    keep = target / 119e6 * n / len(nps)          # fraction of the sampled survivors
+    keep = target / (119e6 / STRIDE) * n / len(nps)          # fraction of the sampled survivors
     if keep >= 1.0:
         print(f"target {target:,} is above the {int(len(nps) / n * 119e6):,} that "
               f"pass the mass filter; keeping all of them")
         return -99.0
     t = float(np.quantile(nps, 1.0 - keep))
     print(f"NP_MIN={t:.3f} keeps {keep:.1%} of the mass-passing rows, "
-          f"about {int(keep * len(nps) / n * 119e6):,} structures")
+          f"about {int(keep * len(nps) / n * 119e6 / STRIDE):,} structures")
     return t
 
 
@@ -208,7 +213,7 @@ def build():
                      **{k: np.concatenate([b[i] for b in buf])
                         for i, k in enumerate(("key", "smiles", "mass", "fp"))})
 
-    for res in _stream():
+    for res in _stream(stride=STRIDE):
         buf.append(res[:4])
         held += len(res[0])
         n += len(res[0])
