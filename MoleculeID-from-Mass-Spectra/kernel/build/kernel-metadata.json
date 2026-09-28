@@ -1,0 +1,15 @@
+{
+  "id": "jagjeetsingh23/casmi26-pubchem-pool-build",
+  "title": "CASMI26 PubChem pool build",
+  "code_file": "pubchem_build.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "jagjeetsingh23/casmi26-molecule-id-code"
+  ],
+  "competition_sources": [],
+  "kernel_sources": []
+}

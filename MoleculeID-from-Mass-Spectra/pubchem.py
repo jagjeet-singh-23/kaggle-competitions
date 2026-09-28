@@ -44,7 +44,12 @@ DATA, WORK = library.DATA, library.WORK
 SRC = f"{DATA}/pubchem/CID-SMILES.gz"
 OUT = os.environ.get("PUBCHEM_OUT", f"{WORK}/ext_pubchem")
 MZ_LO, MZ_HI = 100.0, 1300.0
-NP_MIN = float(os.environ.get("NP_MIN", 0.0))
+NP_MIN = float(os.environ.get("NP_MIN", -99.0))
+# TARGET picks NP_MIN from a strided sample so the build lands near a row count,
+# rather than making the threshold a guess that is only checked an hour later. The
+# count is a memory budget: about 530 bytes a row, against a 30 GB kernel that also
+# holds the index.
+TARGET = int(os.environ.get("TARGET", 0))
 SHARD = 500_000
 NPROC = int(os.environ.get("NPROC", 8))
 CHUNK = 50_000
@@ -140,6 +145,34 @@ def _stream(stride=1, limit=None):
                     return
 
 
+def sample(n=2_000_000, stride=53):
+    """NP-likeness and SMILES length for a strided sample of the mass-passing rows.
+
+    Strided rather than the head of the file: PubChem CIDs run roughly in deposit
+    order, so the first few million are classic small molecules and would make a
+    natural-product filter look far more generous than it is.
+    """
+    nps, lens = [], []
+    for res in _stream(stride=stride, limit=n):
+        nps.append(res[4])
+        lens.append(np.char.str_len(res[1]))
+    return np.concatenate(nps), np.concatenate(lens), n
+
+
+def pick_threshold(target):
+    """The NP_MIN that keeps about `target` structures out of all 119M."""
+    nps, _, n = sample()
+    keep = target / 119e6 * n / len(nps)          # fraction of the sampled survivors
+    if keep >= 1.0:
+        print(f"target {target:,} is above the {int(len(nps) / n * 119e6):,} that "
+              f"pass the mass filter; keeping all of them")
+        return -99.0
+    t = float(np.quantile(nps, 1.0 - keep))
+    print(f"NP_MIN={t:.3f} keeps {keep:.1%} of the mass-passing rows, "
+          f"about {int(keep * len(nps) / n * 119e6):,} structures")
+    return t
+
+
 def pilot(n=2_000_000, stride=53):
     """Survival rate on a strided sample.
 
@@ -147,16 +180,21 @@ def pilot(n=2_000_000, stride=53):
     order, so the first few million are classic small molecules and would make a
     natural-product filter look far more generous than it is.
     """
-    nps = np.concatenate([r[4] for r in _stream(stride=stride, limit=n)])
-    print(f"\nNP_MIN={NP_MIN}: {len(nps):,} of {n:,} sampled pass the mass and "
-          f"fragment filters ({len(nps) / n:.2%})")
+    print(f"\n{len(nps):,} of {n:,} sampled rows pass the mass and fragment "
+          f"filters ({len(nps) / n:.2%})")
+    print(f"SMILES length: median {int(np.median(lens))}, "
+          f"99.9th percentile {int(np.quantile(lens, 0.999))}, max {lens.max()}")
     print(f"\n{'NP_MIN':>8}{'kept':>10}{'of PubChem':>14}{'in memory':>12}")
     for t in (-3, -2, -1, 0, 0.5, 1.0, 1.5, 2.0, 2.5):
         f = float((nps >= t).mean()) * len(nps) / n
-        print(f"{t:>8.1f}{f:>9.2%}{int(f * 119e6):>14,}{f * 119e6 * 460 / 1e9:>10.1f} GB")
+        print(f"{t:>8.1f}{f:>9.2%}{int(f * 119e6):>14,}"
+              f"{f * 119e6 * (SMILES_MAX + 278) / 1e9:>10.1f} GB")
 
 
 def build():
+    global NP_MIN
+    if TARGET:
+        NP_MIN = pick_threshold(TARGET)     # inherited by the workers through fork
     os.makedirs(OUT, exist_ok=True)
     if any(f.endswith(".npz") for f in os.listdir(OUT)):
         print(f"{OUT} is not empty; delete it to rebuild")
