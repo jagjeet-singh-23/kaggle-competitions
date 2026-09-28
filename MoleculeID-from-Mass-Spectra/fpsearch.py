@@ -25,7 +25,7 @@ import torch
 import library
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
-from fingerprint import Net, NBIN, predict
+from fingerprint import Net, NBIN, BIN, predict
 from metric import mrr
 from search import Searcher, spectra_of
 
@@ -43,7 +43,12 @@ def load_model():
     assert os.path.exists(path), "run `python3 fingerprint.py --train --holdout` first"
     ck = torch.load(path, weights_only=False)
     bits = ck["bits"]
-    m = Net(2 * NBIN + 2, len(bits))
+    # Rebuild the exact architecture the checkpoint was trained with, and put the
+    # featuriser back in the matching mode, rather than assuming the defaults.
+    fingerprint.DEFECT = ck.get("defect", False)
+    hidden = ck.get("hidden", 1024)
+    assert ck.get("bin", BIN) == BIN, "checkpoint used a different m/z bin width"
+    m = Net(fingerprint.n_features(), len(bits), hidden=hidden)
     m.load_state_dict(ck["state"])
     m.eval()
     return m, bits

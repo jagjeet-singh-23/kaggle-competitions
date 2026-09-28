@@ -37,35 +37,57 @@ WORK = library.WORK
 MODEL = f"{WORK}/fpmodel.pt"
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
+HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
 MZ_MAX = 1300.0
 NBIN = int(MZ_MAX / BIN)
 BIT_LO, BIT_HI = 0.005, 0.995   # drop bits that are almost always on or off
+DEFECT = os.environ.get("FP_DEFECT", "1") == "1"   # mass-defect channel per bin
 
 torch.manual_seed(0)
 
 
-def featurise(mz, it, precursor):
-    """(batch, 2 * NBIN + 2) from padded peak arrays.
+def n_features(defect=None):
+    d = DEFECT if defect is None else defect
+    return (4 if d else 2) * NBIN + 2
+
+
+def featurise(mz, it, precursor, defect=None):
+    """(batch, n_features) from padded peak arrays.
 
     Two views of every peak: its m/z, and its neutral loss from the precursor. The
     loss axis is what makes a fragment interpretable across molecules of different
     mass -- losing water is the same event at m/z 300 and at 900, and a model given
     only absolute m/z has to learn that separately for every precursor.
+
+    With `defect`, each bin also carries the intensity-weighted sum of the peaks'
+    mass defects (the fractional part of m/z). A 1 Da bin throws away exactly the
+    information that separates one elemental formula from another -- C3H8 and CO2
+    are both "44" but differ by 0.036 Da -- and going to 0.1 Da bins to recover it
+    would make the input ten times wider. This recovers most of it at twice the
+    width: the model sees both how much landed in a bin and where inside the bin.
     """
+    d = DEFECT if defect is None else defect
     n = len(mz)
-    X = np.zeros((n, 2 * NBIN + 2), np.float32)
+    X = np.zeros((n, n_features(d)), np.float32)
     rows = np.repeat(np.arange(n), mz.shape[1])
     m = np.asarray(mz, np.float32).ravel()
     v = np.asarray(it, np.float32).ravel()
     keep = (m > 0) & (v > 0)
+    off = 2 * NBIN if d else 0
+
     b = (m / BIN).astype(np.int32)
     ok = keep & (b >= 0) & (b < NBIN)
     np.add.at(X, (rows[ok], b[ok]), v[ok])
+    if d:
+        np.add.at(X, (rows[ok], off + b[ok]), v[ok] * (m[ok] - b[ok] * BIN))
 
     loss = np.repeat(np.asarray(precursor, np.float32), mz.shape[1]) - m
     lb = (loss / BIN).astype(np.int32)
     ok = keep & (lb >= 0) & (lb < NBIN)
     np.add.at(X, (rows[ok], NBIN + lb[ok]), v[ok])
+    if d:
+        np.add.at(X, (rows[ok], off + NBIN + lb[ok]),
+                  v[ok] * (loss[ok] - lb[ok] * BIN))
 
     X[:, -2] = np.asarray(precursor, np.float32) / MZ_MAX
     X[:, -1] = (np.asarray(mz, np.float32) > 0).sum(1) / mz.shape[1]
@@ -141,7 +163,7 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
         print(f"train {len(tr):,} spectra / val {len(va):,} "
               f"({len(val_struct):,} held-out structures)", flush=True)
 
-    model = Net(2 * NBIN + 2, len(bits))
+    model = Net(n_features(), len(bits), hidden=HIDDEN)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     lossf = nn.BCEWithLogitsLoss()
     t0 = time.time()
@@ -162,7 +184,11 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
             print(f"  epoch {ep + 1}/{epochs}  loss {tot / len(order):.4f}  "
                   f"tanimoto {'/'.join(f'{x:.4f}' for x in evaluate(model, mz, it, pm, rows, fp, bits, va))}"
                   f" (model/shuffled/mean-fp)  {(time.time() - t0) / 60:.1f} min", flush=True)
-    torch.save({"state": model.state_dict(), "bits": bits}, MODEL)
+    # The architecture travels with the weights. Without this, a checkpoint trained
+    # with different features or width cannot be reloaded -- load_model would build
+    # the default shape and fail on the state dict.
+    torch.save({"state": model.state_dict(), "bits": bits,
+                "defect": DEFECT, "hidden": HIDDEN, "bin": BIN}, MODEL)
     if not quiet:
         print(f"wrote {MODEL}")
     return model, bits
@@ -211,8 +237,8 @@ def selftest():
     must be able to learn a fingerprint that is a deterministic function of peaks."""
     mz = np.array([[100.0, 300.0, 0.0]], np.float32)
     it = np.array([[1.0, 2.0, 0.0]], np.float32)
-    X = featurise(mz, it, np.array([500.0], np.float32))
-    assert X.shape == (1, 2 * NBIN + 2)
+    X = featurise(mz, it, np.array([500.0], np.float32), defect=False)
+    assert X.shape == (1, n_features(False))
     assert X[0, 100] == 1.0 and X[0, 300] == 2.0, "m/z bins"
     assert X[0, NBIN + 400] == 1.0, "neutral loss 500-100"
     assert X[0, NBIN + 200] == 2.0, "neutral loss 500-300"
@@ -221,8 +247,20 @@ def selftest():
 
     # Two peaks in the same bin accumulate rather than overwrite.
     X2 = featurise(np.array([[100.2, 100.4]], np.float32),
-                   np.array([[1.0, 1.0]], np.float32), np.array([500.0], np.float32))
+                   np.array([[1.0, 1.0]], np.float32), np.array([500.0], np.float32),
+                   defect=False)
     assert X2[0, 100] == 2.0, X2[0, 100]
+
+    # The defect channel must separate two peaks that share a bin. C3H8 and CO2 are
+    # both "44" and differ by 0.036 Da, which 1 Da binning cannot see at all.
+    a = featurise(np.array([[44.0262]], np.float32), np.array([[1.0]], np.float32),
+                  np.array([[200.0]], np.float32).ravel(), defect=True)
+    b = featurise(np.array([[44.9977]], np.float32), np.array([[1.0]], np.float32),
+                  np.array([[200.0]], np.float32).ravel(), defect=True)
+    assert a.shape[1] == n_features(True) == 4 * NBIN + 2
+    assert a[0, 44] == b[0, 44] == 1.0, "same bin"
+    assert abs(a[0, 2 * NBIN + 44] - 0.0262) < 1e-4, a[0, 2 * NBIN + 44]
+    assert abs(b[0, 2 * NBIN + 44] - 0.9977) < 1e-4, b[0, 2 * NBIN + 44]
 
     # A tiny learnable problem: the bit is on iff a peak sits in bin 200.
     rng = np.random.default_rng(0)
@@ -235,7 +273,7 @@ def selftest():
     pm = np.full(n, 600.0, np.float32)
     X = torch.tensor(featurise(mz, it, pm))
     Y = torch.tensor(has.astype(np.float32)).unsqueeze(1)
-    m = Net(2 * NBIN + 2, 1, hidden=32)
+    m = Net(n_features(), 1, hidden=32)
     opt = torch.optim.AdamW(m.parameters(), lr=1e-2)
     lossf = nn.BCEWithLogitsLoss()
     for _ in range(150):
