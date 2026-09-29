@@ -361,31 +361,80 @@ per candidate. ChEMBL and the curated metabolite databases are the shape to try 
 one to two million structures of exactly that chemistry, where the dilution is small
 enough that a modest coverage gain pays.
 
-## 11. What is next
+## 11. The leaderboard kills the coverage lever
+
+ChEMBL went to the leaderboard as one controlled change, the pool, at the same gamma
+as the 0.213 run. It scored **0.187**.
+
+| | held-out class 3 | public LB |
+|---|---|---|
+| v4, COCONUT | 0.0288 | 0.213 |
+| v8, COCONUT + ChEMBL | 0.0393 | **0.187** |
+
+Held-out class 3 rose 32% and the leaderboard fell 0.026. Solving for the real
+per-class scores, with the split's class 1 and class 2 deltas carried over (−0.0090
+and −0.0460, worth −0.0071 at the solved mix):
+
+```
+0.735 * real class 3 = 0.187 - (0.1682 - 0.0071) = 0.0259
+real class 3         = 0.0610 -> 0.0352          (-42%)
+```
+
+**Real coverage cannot have fallen** — the union pool is a strict superset of COCONUT,
+so every structure that was reachable still is. What fell is ranking quality, and it
+fell much faster than the split said:
+
+| | pool multiplier | coverage | quality |
+|---|---|---|---|
+| held-out split | ×4.58 | ×2.13 | ×0.61 (−0.065/doubling) |
+| real test | ×4.58 | ×2.13 (assumed) | ×0.27 (−0.16/doubling) |
+
+That is the whole result, and it is best read as two elasticities against pool size:
+**coverage +0.50, quality −0.86.** An expansion pays only when coverage grows almost
+as fast as the pool does, which means almost every structure it adds is one some query
+needs. No general database is like that; COCONUT reaches 8.0% of held-out class 3
+carrying 217 candidates, ChEMBL 11.5% carrying 898, PubChem 6.5% carrying 1030.
+
+So the coverage lever is exhausted, and section 8's projections — 50% coverage for
+0.298, 100% for 0.453 — are dead. They assumed quality held while coverage grew, and
+at −0.16 per doubling the arithmetic never closes: reaching 50% coverage needs a pool
+around 4× larger, by which point quality is 0.17 and class 3 is 0.085, against the
+0.096 that breaking even would need.
+
+Three submissions now say the same thing from different directions. Better features
+moved class 2 and not class 3 (section 8). A twenty-times-larger pool moved neither
+(section 10). A well-chosen pool moved held-out class 3 up and the real score down
+(here). What is left is the term the three have in common: how well a candidate is
+ranked *against the isomers that share its mass*. That is a scoring problem, not a
+retrieval one.
+
+## 12. What is next
 
 Ranked by expected value, with the measurements that rank them:
 
-1. **A denser candidate pool, not a bigger one.** Class 3 is 73.5% of the metric and
-   is coverage-limited (section 8), but section 10 showed that buying coverage with
-   size loses: the structures a general database adds share the query's mass and are
-   the confusable kind. What is needed is one to two million structures of the
-   chemistry that reaches spectral libraries — ChEMBL (CC BY-SA, 2.4M bioactive
-   compounds), ChEBI, the metabolite databases — where dilution stays near COCONUT's
-   and coverage can only go up. The test is already written: `dilute.py` against
-   `data/splits.npz`, where COCONUT scores 0.0293 on class 3 carrying 217 candidates.
-2. **Slow the quality decay.** The same measurement read the other way: class-3
-   ranking quality falls about 0.08 per doubling of the pool, and every point of that
-   is a point of coverage that has to be bought back. A sharper scorer among
-   right-mass candidates — a reverse or hybrid cosine (section 4), adduct-aware
-   scoring, a fingerprint trained to discriminate isomers rather than reconstruct bits
-   — raises the ceiling on every future pool at once.
-3. **A reverse or hybrid cosine**, per section 4. The peak-count asymmetry is the
-   clearest remaining mismatch between the data and the scoring function. It caps
-   class 1 and class 2 directly, which are 26.5% of the metric between them, and it
-   feeds item 2.
+1. **Rank better among same-mass isomers.** Section 11 makes this the only lever with
+   headroom: quality falls 0.16 per doubling of pool on the real test, so every
+   candidate carried is expensive and the way to profit is to score them better rather
+   than to carry fewer or more. The measurement to run first is the cheapest one —
+   restrict the held-out evaluation to candidates sharing the answer's molecular
+   formula and see what class 3 becomes. That is the ceiling a perfect formula filter
+   would reach, and it says whether formula prediction is worth building.
+2. **A formula-consistency term.** A 5 ppm window admits several molecular formulas,
+   and only one of them can explain the fragments: a candidate's formula must contain
+   every fragment's. Scoring candidates by the fraction of spectrum intensity their
+   formula can account for prunes the part of the window that is not isomeric, without
+   a new model and without touching coverage. Item 1 measures its ceiling.
+3. **A reverse or hybrid cosine**, per section 4. Test spectra carry a median of 230
+   peaks against a library median of 9 to 11, which is the clearest remaining mismatch
+   between the data and the scoring function. It caps class 1 and class 2 directly —
+   26.5% of the metric between them — and sharpens item 1.
 4. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
    an `[M+H]+` reference on equal terms.
+
+Candidate-pool work is closed. Three databases were measured — COCONUT, PubChem
+(8.4M), ChEMBL (2.6M) — and the two expansions both lost, the second of them on the
+leaderboard.
 
 De novo generation is off this list. Earlier versions of it said class 3 was
 "structurally unreachable by retrieval", which was an inference from a held-out split
@@ -393,7 +442,7 @@ that bans the answer by construction, not a measurement. The leaderboard says re
 class 3 already scores 0.0610 by retrieval, and that the public databases hold most of
 it.
 
-## 12. Files
+## 13. Files
 
 ```
 metric.py     MRR@25 exactly as scored; self-checks against the rules' examples
@@ -409,6 +458,7 @@ external.py   COCONUT as a candidate source, sharded    +448k structures
 pubchem.py    PubChem as a candidate source; picks its NP-likeness threshold
               from a strided sample to land on a row count. Measured worse than
               COCONUT (section 10) and not shipped
+chembl.py     ChEMBL as a candidate source; 2.6M structures, eight minutes
 dilute.py     coverage against dilution: subsample the pool, or widen the window
               CASMI_EXT takes several directories, so two pools can be compared
 ```

@@ -143,17 +143,18 @@ Three findings worth the click:
   `train.parquet` by matching `(precursor_mz, adduct, num_peaks)` — it is entirely
   class 1, while the hidden test is a mix of all three. Tuning against that number is
   tuning against a set that does not contain the problem.
-- **Class 3 is 73.5% of the test, it is coverage-limited, and a database twenty times
-  larger made it worse.** Four submissions with known per-class scores solve the class
-  mix exactly. Better features lifted class 2 by 43% relative and moved the real class
-  3 by nothing (0.0617 → 0.0610) — a better fingerprint cannot find a molecule that is
-  not in the candidate pool. So: 124M PubChem compounds, filtered and fingerprinted
-  into 8.4M candidates. Coverage went 8.0% → 9.5% and ranking quality went 0.366 →
-  0.269, because everything a database adds inside a 5 ppm window is an isomer of the
-  answer. Coverage has to grow faster than quality falls, and it grows slower. The
-  filter was the wrong axis twice over: the held-out class 3 scores −1.43 on
-  NP-likeness, so it is not natural-product-like at all, and its median PubChem CID is
-  92M, so it is not long-studied either.
+- **Class 3 is 73.5% of the test, and three submissions say its candidate pool is
+  finished.** Four submissions with known per-class scores solve the class mix
+  exactly. Better features lifted class 2 by 43% relative and moved real class 3 by
+  nothing (0.0617 → 0.0610). A PubChem build of 8.4M structures moved held-out
+  coverage 8.0% → 9.5% and cost ranking quality 0.366 → 0.269. ChEMBL, 2.6M structures
+  of exactly the right chemistry, lifted held-out class 3 by 32% and took the
+  leaderboard from **0.213 to 0.187** — which solves to real class 3 falling 0.0610 →
+  0.0352, on a pool that is a strict superset. Coverage cannot fall, so quality did,
+  at 0.16 per doubling against the split's 0.065. As elasticities against pool size:
+  coverage +0.50, quality −0.86. An expansion pays only if nearly every structure it
+  adds is one some query needs, and no general database is like that.
+
 - **A 0.5% key mismatch was leaking the split.** The dataset ships an `inchikey14`
   column; the metric scores on the key RDKit derives from the SMILES. They disagree on
   amide/imide tautomers, so structures held out by dataset key stayed reachable, and

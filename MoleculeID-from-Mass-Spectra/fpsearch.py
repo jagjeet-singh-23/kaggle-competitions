@@ -151,12 +151,18 @@ def main():
 def submit(path=None, gamma=GAMMA):
     """Write submission.csv using search + analog + the predicted fingerprint.
 
-    gamma is 64 by default, which is not the value that maximises the held-out mean
-    (that is 32). The held-out split weights the three classes equally and section 7
-    showed the real test does not -- class 1 is 12-15% of it. Re-weighting the sweep
-    by every plausible class mix, gamma=64 is within 2% of the best choice at each
-    one, where 32 and 256 are each 2.3% off at the far end. It is the minimax pick,
-    not the maximum.
+    gamma is 32. It was 64 for one revision, as the minimax pick across every class
+    mix that was plausible before the leaderboard pinned the mix exactly; that
+    argument retired with the uncertainty, and this docstring outlived it by a
+    revision, which is how a run that was meant to be a gamma-64 control turned out
+    to have been 32 all along.
+
+    32 is the maximum under the solved mix (14.0 / 12.6 / 73.5) and it is the maximum
+    for both candidate pools, so it is not a pool-specific tuning:
+
+        gamma       16      32      64     128     256
+        COCONUT   .1801   .1898   .1893   .1890   .1834
+        + ChEMBL  .1791   .1895   .1878   .1868   .1786
     """
     import pandas as pd
     from metric import validate

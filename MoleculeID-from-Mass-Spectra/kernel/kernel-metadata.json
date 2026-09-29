@@ -13,8 +13,7 @@
   "dataset_sources": [
     "jagjeetsingh23/casmi26-molecule-id-code",
     "jagjeetsingh23/rdkit-2026-3-3-cp312",
-    "jagjeetsingh23/casmi26-coconut-pool",
-    "jagjeetsingh23/casmi26-chembl-pool"
+    "jagjeetsingh23/casmi26-coconut-pool"
   ],
   "kernel_sources": []
 }
