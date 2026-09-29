@@ -45,6 +45,21 @@ from analog import FP_BITS
 DATA, WORK = library.DATA, library.WORK
 SRC = f"{DATA}/coconut_csv_lite.zip"
 OUT = os.environ.get("CASMI_EXT", f"{WORK}/ext")
+
+
+def shards():
+    """Every shard, across the colon-separated directories in OUT.
+
+    Two sources are worth merging because their coverage barely overlaps: COCONUT
+    indexes natural products and the PubChem build selects by NP-likeness, and each
+    holds structures the other does not. Sorting within a directory but not across
+    them keeps each source's shards contiguous, which is only cosmetic.
+    """
+    import glob
+    fs = []
+    for d in OUT.split(":"):
+        fs += sorted(glob.glob(f"{d}/shard_*.npz"))
+    return fs
 MZ_LO, MZ_HI = 100.0, 1300.0      # the mass range the index and test occupy
 SHARD = 50_000                    # rows per shard
 
@@ -135,8 +150,7 @@ def load():
     11 GB, and the machine has 15. Reading each shard into its slice and dropping it
     keeps the peak at the result plus one shard.
     """
-    import glob
-    fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
+    fs = shards()
     assert fs, f"no shards in {OUT}; run `python3 external.py --build` first"
     sizes, out = [], None
     for f in fs:                      # headers only: npz members are read lazily
@@ -155,24 +169,67 @@ def load():
     return out
 
 
-def merge(key, smiles, mass, fp):
+def merge(key, smiles, mass, fp, cache=None):
     """Index arrays plus every external structure they do not already have.
 
     load() then concatenate would hold the whole external pool and the merged result
     at the same time -- 11 GB at PubChem scale, on a machine with 15. Counting the new
     rows first and filling a preallocated result one shard at a time keeps the peak at
     the result plus a single shard.
+
+    `cache` is a directory to build the merged pool in, and the reason it exists is
+    that the two widest columns need not be resident at all. Fingerprints and SMILES
+    are 4.7 GB across 8.6M structures, and a query touches the couple of thousand rows
+    inside its mass window; keeping them as .npy on disk and memory-mapping them takes
+    the pool from 5.3 GB of RAM to about 0.6 GB. key and mass stay in memory because
+    every lookup and every mass window scans them whole.
+
+    A cache is reused when its row count matches, so the merge runs once.
     """
-    import glob
-    fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
+    fs = shards()
     assert fs, f"no shards in {OUT}"
-    masks = []
+    masks, kept = [], []
     for f in fs:
         with np.load(f) as d:
-            masks.append(~np.isin(d["key"], key))
+            m = ~np.isin(d["key"], key)
+            masks.append(m)
+            kept.append(d["key"][m])
+    # Deduplicate across shards as well as against the index. Two sources overlap,
+    # and a structure present twice is scored twice by the same Tanimoto and climbs
+    # the ranking for nothing. Keys only, so this costs 14 bytes a row.
+    allk = np.concatenate(kept) if kept else np.zeros(0, key.dtype)
+    del kept
+    _, first = np.unique(allk, return_index=True)
+    uniq = np.zeros(len(allk), bool)
+    uniq[first] = True
+    at = 0
+    for i, m in enumerate(masks):
+        c = int(m.sum())
+        m[m] = uniq[at:at + c]
+        at += c
+    del allk, uniq
     n = len(key) + sum(int(m.sum()) for m in masks)
-    out = {"key": np.empty(n, key.dtype), "smiles": np.empty(n, smiles.dtype),
-           "mass": np.empty(n, mass.dtype), "fp": np.empty((n,) + fp.shape[1:], fp.dtype)}
+
+    if cache:
+        os.makedirs(cache, exist_ok=True)
+        paths = {k: f"{cache}/{k}.npy" for k in ("key", "smiles", "mass", "fp")}
+        if all(os.path.exists(p) for p in paths.values()):
+            got = {k: np.load(p, mmap_mode="r") for k, p in paths.items()}
+            if len(got["key"]) == n:
+                print(f"external pool cached at {cache}")
+                return (np.asarray(got["key"]), got["smiles"],
+                        np.asarray(got["mass"]), got["fp"], n - len(key))
+
+    def alloc(name, dtype, shape):
+        if not cache:
+            return np.empty(shape, dtype)
+        return np.lib.format.open_memmap(paths[name], mode="w+",
+                                         dtype=dtype, shape=shape)
+
+    out = {"key": alloc("key", key.dtype, (n,)),
+           "smiles": alloc("smiles", smiles.dtype, (n,)),
+           "mass": alloc("mass", mass.dtype, (n,)),
+           "fp": alloc("fp", fp.dtype, (n,) + fp.shape[1:])}
     for k, v in zip(out, (key, smiles, mass, fp)):
         out[k][:len(key)] = v
     at = len(key)
@@ -184,6 +241,14 @@ def merge(key, smiles, mass, fp):
             for k in out:
                 out[k][at:at + c] = d[k][m]
         at += c
+    if cache:
+        for v in out.values():
+            v.flush()
+        # key and mass are read in full on every query; reopen the wide two read-only
+        # so the pages can be dropped under pressure instead of counting as dirty.
+        return (np.array(out["key"]), np.load(paths["smiles"], mmap_mode="r"),
+                np.array(out["mass"]), np.load(paths["fp"], mmap_mode="r"),
+                n - len(key))
     return out["key"], out["smiles"], out["mass"], out["fp"], n - len(key)
 
 

@@ -143,12 +143,17 @@ Three findings worth the click:
   `train.parquet` by matching `(precursor_mz, adduct, num_peaks)` — it is entirely
   class 1, while the hidden test is a mix of all three. Tuning against that number is
   tuning against a set that does not contain the problem.
-- **Class 3 is 73.5% of the test, and it is coverage-limited.** Four submissions with
-  known per-class scores solve the class mix exactly. Better features lifted class 2
-  by 43% relative and moved the real class 3 by nothing at all (0.0617 → 0.0610) —
-  a better fingerprint cannot find a molecule that is not in the candidate pool.
-  Backing coverage out of the numbers: the public database reaches ~17% of the real
-  class 3, and matching the leader would need ~60%.
+- **Class 3 is 73.5% of the test, it is coverage-limited, and a database twenty times
+  larger made it worse.** Four submissions with known per-class scores solve the class
+  mix exactly. Better features lifted class 2 by 43% relative and moved the real class
+  3 by nothing (0.0617 → 0.0610) — a better fingerprint cannot find a molecule that is
+  not in the candidate pool. So: 124M PubChem compounds, filtered and fingerprinted
+  into 8.4M candidates. Coverage went 8.0% → 9.5% and ranking quality went 0.366 →
+  0.269, because everything a database adds inside a 5 ppm window is an isomer of the
+  answer. Coverage has to grow faster than quality falls, and it grows slower. The
+  filter was the wrong axis twice over: the held-out class 3 scores −1.43 on
+  NP-likeness, so it is not natural-product-like at all, and its median PubChem CID is
+  92M, so it is not long-studied either.
 - **A 0.5% key mismatch was leaking the split.** The dataset ships an `inchikey14`
   column; the metric scores on the key RDKit derives from the SMILES. They disagree on
   amide/imide tautomers, so structures held out by dataset key stayed reachable, and

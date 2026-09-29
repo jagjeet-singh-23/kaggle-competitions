@@ -267,7 +267,7 @@ def coverage():
         hit = int(np.isin(q, ext).sum())
         print(f"  class {c}: {hit:3d}/{len(q)} ({hit / len(q):5.1%}) reachable")
     print("\nCOCONUT reached 8.0% of class 3; a REST probe of the same 200 skeletons "
-          "found 87% of them somewhere in PubChem, so the gap between that and this "
+          "found 88.7% of them somewhere in PubChem, so the gap between that and this "
           "number is what the mass and NP-likeness filters cost.")
 
 

@@ -35,6 +35,9 @@ from library import DATA, WORK
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 DESC = f"{WORK}/structures.npz"
+# Where the merged pool is built as memory-mapped .npy. Empty means build it
+# in RAM, which is what COCONUT-sized pools did and what the self-checks use.
+POOL_CACHE = os.environ.get("POOL_CACHE", f"{WORK}/pool")
 
 FP_BITS = 2048
 MASS_PPM = 5.0       # neutral-mass window; swept, with a clear optimum at 5
@@ -158,7 +161,8 @@ class Analog:
                     n_new = int(new.sum())
                     del e, new
                 else:
-                    key, smiles, mass, fp, n_new = ext_db.merge(key, smiles, mass, fp)
+                    key, smiles, mass, fp, n_new = ext_db.merge(
+                        key, smiles, mass, fp, cache=POOL_CACHE)
                 self.external_n = n_new
                 print(f"external pool: +{self.external_n:,} structures")
                 self.n_internal = len(key) - self.external_n

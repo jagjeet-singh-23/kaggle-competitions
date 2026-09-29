@@ -292,8 +292,13 @@ the implied real coverage from 17% down to 0.0610/0.492 = **12.4%**.
 Subsampling can only shrink the pool, so it measures dilution over one doubling where
 an expansion needs six. Widening the neutral-mass window instead adds candidates
 without removing the answer, and reaches pool sizes a real expansion would produce.
-Those candidates have the wrong mass, which nothing in the ranking looks at — every
-term scores a structure, not its mass — so they compete on the same footing:
+Those candidates have the wrong mass. Nothing in the ranking looks at mass, so the
+reasoning at the time was that they compete on the same footing as the right-mass ones
+a bigger database would add. **That conclusion is wrong, and section 10 measures the
+real slope at seven times steeper.** A candidate inside the query's 5 ppm window shares
+its molecular mass, which constrains its formula and therefore most of its
+composition; a candidate 160 ppm away does not. Real isomers are the confusable kind,
+and a database supplies those exclusively.
 
 | ppm | median pool | class 1 | class 2 | quality |
 |---|---|---|---|---|
@@ -302,63 +307,85 @@ term scores a structure, not its mass — so they compete on the same footing:
 | 80 | 2393 | 0.8344 | 0.3446 | 0.4769 |
 | 160 | 4711 | 0.8241 | 0.3163 | 0.4561 |
 
-**A 23x pool costs class 3 fifteen thousandths.** Ranking quality is −0.011 per
-doubling; class 1 is −0.010 and class 2 is −0.037. Class 3 is nearly immune to pool
-size, because the predicted fingerprint separates the right structure from arbitrary
-ones sharply, while class 2 rides on analog propagation and a wider pool is exactly
-more structures competing to be somebody's analog.
-
-That last number is measured under window widening, which grows the index side of the
-pool too. A database expansion grows only the external side, and the subsample sweep
-puts that at −0.012 per doubling for class 2 and −0.018 for class 1.
+What this does measure honestly is **class 2, at −0.037 per doubling**: it rides on
+analog propagation, and a wider pool is more structures competing to be somebody's
+analog, whatever their mass. That is against a pool growing on the index side too; a
+database grows only the external side, and the subsample sweep puts that at −0.012 per
+doubling for class 2 and −0.018 for class 1.
 
 Protecting class 2 by denying external structures the analog term (`PROP_INTERNAL=1`)
 does not pay: class 2 gained 0.005 and class 3 lost 0.017, which at the solved class
 mix is −0.0105 of leaderboard.
 
-So the arithmetic for an expansion of m times the current pool:
-
-```
-class 1  0.804 - 0.018*log2(m)         real values, solved from the leaderboard
-class 2  0.442 - 0.012*log2(m)
-quality  0.492 - 0.011*log2(m)
-LB       0.140*class1 + 0.126*class2 + 0.735*coverage*quality
-```
-
-At m = 84 (PubChem after filtering, ~60M structures) the dilution costs 0.026 of
-leaderboard and quality falls to 0.422. **Coverage only has to reach 22.7% to break
-even**, against 12.4% today:
-
-| real class 3 coverage | class 3 | predicted LB |
-|---|---|---|
-| 12.4% (now, COCONUT) | 0.061 | 0.213 |
-| 22.7% | 0.096 | 0.213 — breakeven |
-| 50% | 0.211 | 0.298 |
-| 70% | 0.295 | 0.360 |
-| 100% | 0.422 | 0.453 |
+## 10. PubChem is twenty times larger and scores worse
 
 A REST probe of all 200 held-out class-3 skeletons found **88.7% of them in PubChem**
-against COCONUT's 8.0%. Those molecules all have reference spectra somewhere, so they
-are known compounds and the real figure will be lower — but breakeven needs the
-coverage multiplier to be 1.8x and the probe says 11x.
+against COCONUT's 8.0%, so: 124M compounds parsed on a Kaggle notebook, filtered to
+the mass range and to the most natural-product-like 8% by RDKit's NP-likeness score,
+deduplicated on key14. 8,390,560 structures, 4.4 GB, six hours.
 
-## 10. What is next
+| pool | structures | median window | class 1 | class 2 | class 3 | quality |
+|---|---|---|---|---|---|---|
+| COCONUT | 712k | 217 | 0.8512 | 0.3859 | **0.0293** | 0.366 |
+| PubChem | 8.63M | 1030 | 0.8485 | 0.3581 | 0.0121 | 0.186 |
+| both | 8.81M | 1104 | 0.8409 | 0.3525 | 0.0256 | 0.269 |
+
+**Coverage rose from 8.0% to 9.5% and ranking quality fell from 0.366 to 0.269.**
+Twelve times the structures bought nineteen percent more coverage and cost twenty-six
+percent of the quality. Coverage has to grow faster than quality falls; it grows
+slower.
+
+The real test does not rescue it. Classes 1 and 2 are real in the held-out split, so
+their losses transfer directly: −0.0103 and −0.0334, which at the solved mix is
+−0.0057 of leaderboard. Class 3 would then have to reach 0.0687 to pay for that, and
+at a quality of 0.28 that needs **24.5% real coverage against 12.4% today**. Scaling
+the measured proxy gain by COCONUT's own real-to-proxy ratio of 1.55 gives 14.7%.
+
+Two filters were tried and both are the wrong axis:
+
+- **NP-likeness.** The held-out class 3 structures score a median of **−1.43** on it.
+  They are not natural-product-like at all — they are the drugs, pesticides and
+  metabolites that reference spectral libraries are made of. A threshold keeping the
+  most natural-product-like 8% of PubChem keeps 6.5% of them, which is worse than
+  random. Nothing else was removing them: all 200 pass the mass, fragment and length
+  filters.
+- **CID order.** Deposit order is a decent proxy for "long-studied compound", and
+  class 1 obliges with a median lowest CID of 22M. Classes 2 and 3 have medians of
+  119M and 92M — the rarer a structure, the later it was deposited. CID ≤ 100M covers
+  49.5% of class 3.
+
+The lever is real and the database was wrong for it. A candidate pool needs density in
+the chemistry that reaches spectral libraries, not size: COCONUT reaches 8.0% carrying
+217 candidates a query, PubChem 6.5% carrying 1030, which is four times less coverage
+per candidate. ChEMBL and the curated metabolite databases are the shape to try next —
+one to two million structures of exactly that chemistry, where the dilution is small
+enough that a modest coverage gain pays.
+
+## 11. What is next
 
 Ranked by expected value, with the measurements that rank them:
 
-1. **Candidate coverage, and nothing else comes close.** Class 3 is 73.5% of the
-   metric, it is coverage-limited rather than ranking-limited (section 8), and a pool
-   23x larger costs its ranking quality 0.011 per doubling (section 9). A public
-   database that holds 88.7% of the held-out class 3 skeletons, where the one in use
-   holds 8.0%, is the whole remaining problem. Everything below is worth a fraction of
-   this.
-2. **A reverse or hybrid cosine**, per section 4. The peak-count asymmetry is the
-   clearest remaining mismatch between the data and the scoring function, and it caps
-   class 1 as well as class 2. Worth about 26.5% of the metric at most, which is what
-   classes 1 and 2 are between them.
-3. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
+1. **A denser candidate pool, not a bigger one.** Class 3 is 73.5% of the metric and
+   is coverage-limited (section 8), but section 10 showed that buying coverage with
+   size loses: the structures a general database adds share the query's mass and are
+   the confusable kind. What is needed is one to two million structures of the
+   chemistry that reaches spectral libraries — ChEMBL (CC BY-SA, 2.4M bioactive
+   compounds), ChEBI, the metabolite databases — where dilution stays near COCONUT's
+   and coverage can only go up. The test is already written: `dilute.py` against
+   `data/splits.npz`, where COCONUT scores 0.0293 on class 3 carrying 217 candidates.
+2. **Slow the quality decay.** The same measurement read the other way: class-3
+   ranking quality falls about 0.08 per doubling of the pool, and every point of that
+   is a point of coverage that has to be bought back. A sharper scorer among
+   right-mass candidates — a reverse or hybrid cosine (section 4), adduct-aware
+   scoring, a fingerprint trained to discriminate isomers rather than reconstruct bits
+   — raises the ceiling on every future pool at once.
+3. **A reverse or hybrid cosine**, per section 4. The peak-count asymmetry is the
+   clearest remaining mismatch between the data and the scoring function. It caps
+   class 1 and class 2 directly, which are 26.5% of the metric between them, and it
+   feeds item 2.
+4. **Adduct-aware scoring.** The index keeps all ten adducts but the cosine ignores
    whether query and reference share one, so a `[M+Na]+` spectrum is compared against
-   an `[M+H]+` reference on equal terms. Same 26.5% ceiling.
+   an `[M+H]+` reference on equal terms.
 
 De novo generation is off this list. Earlier versions of it said class 3 was
 "structurally unreachable by retrieval", which was an inference from a held-out split
@@ -366,7 +393,7 @@ that bans the answer by construction, not a measurement. The leaderboard says re
 class 3 already scores 0.0610 by retrieval, and that the public databases hold most of
 it.
 
-## 11. Files
+## 12. Files
 
 ```
 metric.py     MRR@25 exactly as scored; self-checks against the rules' examples
@@ -380,8 +407,10 @@ fingerprint.py  spectrum -> Morgan bits; binned m/z, neutral loss, mass defect
 fpsearch.py   Rung 3: the three scores combined         0.8512 / 0.3859 / 0.0293
 external.py   COCONUT as a candidate source, sharded    +448k structures
 pubchem.py    PubChem as a candidate source; picks its NP-likeness threshold
-              from a strided sample to land on a row count
+              from a strided sample to land on a row count. Measured worse than
+              COCONUT (section 10) and not shipped
 dilute.py     coverage against dilution: subsample the pool, or widen the window
+              CASMI_EXT takes several directories, so two pools can be compared
 ```
 
 Self-checks that need no competition data:
