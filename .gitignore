@@ -41,3 +41,5 @@ MoleculeID-from-Mass-Spectra/kernel/pubchemdb/
 
 # Staged copy for `kaggle kernels push`; the source is kernel/pubchem_build.py.
 MoleculeID-from-Mass-Spectra/kernel/build/pubchem_build.py
+
+MoleculeID-from-Mass-Spectra/kernel/chembldb/
