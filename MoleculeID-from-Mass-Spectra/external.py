@@ -213,7 +213,15 @@ def merge(key, smiles, mass, fp, cache=None):
     if cache:
         os.makedirs(cache, exist_ok=True)
         paths = {k: f"{cache}/{k}.npy" for k in ("key", "smiles", "mass", "fp")}
-        if all(os.path.exists(p) for p in paths.values()):
+        # The signature is the shard list with sizes, not just the row count: two
+        # different databases can agree on a count, and silently reusing the wrong
+        # pool would look like a scoring change rather than a stale file.
+        sig = "\n".join(f"{f} {os.path.getsize(f)}" for f in fs) + f"\n{n}\n"
+        sigfile = f"{cache}/sources.txt"
+        fresh = (os.path.exists(sigfile)
+                 and open(sigfile).read() == sig
+                 and all(os.path.exists(p) for p in paths.values()))
+        if fresh:
             got = {k: np.load(p, mmap_mode="r") for k, p in paths.items()}
             if len(got["key"]) == n:
                 print(f"external pool cached at {cache}")
@@ -244,6 +252,7 @@ def merge(key, smiles, mass, fp, cache=None):
     if cache:
         for v in out.values():
             v.flush()
+        open(sigfile, "w").write(sig)     # only after every array is on disk
         # key and mass are read in full on every query; reopen the wide two read-only
         # so the pages can be dropped under pressure instead of counting as dirty.
         return (np.array(out["key"]), np.load(paths["smiles"], mmap_mode="r"),
