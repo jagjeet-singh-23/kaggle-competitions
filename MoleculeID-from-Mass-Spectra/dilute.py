@@ -57,10 +57,22 @@ SPLITS = os.environ.get("SPLITS", f"{WORK}/splits.npz")
 ORACLE = os.environ.get("FORMULA_ORACLE") == "1"
 # DELTAS sweeps the weight on formula.explained, the fraction of spectrum intensity a
 # candidate's formula can account for (section 12, item 2).
-# TRUE_ADDUCT=1 opens only the first query spectrum's own adduct window, as submit()
-# does with the adduct column the test ships. The index does not store adducts, so it
-# is recovered from the answer's mass; 0 opens every adduct of the polarity.
-TRUE_ADDUCT = os.environ.get("TRUE_ADDUCT") == "1"
+# TRUE_ADDUCT=1 (default) opens only the first query spectrum's own adduct window, as
+# submit() does with the adduct column the test ships. The index does not store
+# adducts, so it is recovered from the answer's mass; 0 opens every adduct of the
+# polarity, which is what this eval did before RESULTS.md section 14.
+TRUE_ADDUCT = os.environ.get("TRUE_ADDUCT", "1") == "1"
+# SPEC_MASS drops spectral matches whose structure cannot have the query's neutral
+# mass: the precursor window ignores adducts, so an [M+Na]+ reference of a molecule
+# 22 Da lighter sits in an [M+H]+ query's window. "direct" filters only their own
+# score and keeps them as analog seeds; "all" drops them as seeds too.
+SPEC_MASS = os.environ.get("SPEC_MASS", "0")
+SPEC_PPM = float(os.environ.get("SPEC_PPM", 10.0))
+# GATES sweeps a gated gamma: a molecule whose best spectral match (mean cosine per
+# spectrum) reaches the gate keeps GAMMA, the rest get GAMMA_HI. A strong library
+# match is class 1, where a high gamma lets fingerprint-similar decoys outvote it.
+GATES = tuple(float(x) for x in os.environ.get("GATES", "2").split(","))
+GAMMA_HI = float(os.environ.get("GAMMA_HI", 128.0))
 DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
 
 
@@ -111,23 +123,39 @@ def explained(j, k, smi, spectra, add):
     return _explained[j, k]
 
 
-def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0):
+def fits(an, key_, pm, add):
+    if key_ not in an.row:
+        return False
+    m = float(an.mass[an.row[key_]])
+    return any(abs(m - (pm - ADDUCTS[a][0])) <= m * SPEC_PPM * 1e-6 for a in add)
+
+
+def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=2.0):
     preds, sizes, kept = {1: {}, 2: {}, 3: {}}, [], []
     for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
-        total, sm = dict(spec), dict(smiles)
+        if SPEC_MASS != "0":
+            fit = {q: v for q, v in spec.items() if fits(an, q, pm, add)}
+            total = dict(fit)
+            if SPEC_MASS == "all":
+                spec = fit
+        else:
+            total = dict(spec)
+        sm = dict(smiles)
         kw = {} if ppm is None else {"ppm": ppm}
         for key_, v in an.propagate(spec, pm, add, **kw).items():
             total[key_] = total.get(key_, 0.0) + BETA * v
             sm.setdefault(key_, an.smiles[an.row[key_]])
         pool = an.pool(pm, add, **kw)
         sizes.append(len(pool))
-        if gamma and len(pool):
+        top_spec = max(spec.values(), default=0.0) / len(spectra)
+        g = gamma if top_spec >= gate else GAMMA_HI
+        if g and len(pool):
             B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
             inter = B @ fpq
             t = inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9)
             for r, v in zip(pool, t):
                 key_ = an.key[r]
-                total[key_] = total.get(key_, 0.0) + gamma * float(v)
+                total[key_] = total.get(key_, 0.0) + g * float(v)
                 sm.setdefault(key_, an.smiles[r])
         if delta:
             for key_ in total:
@@ -164,9 +192,11 @@ def main():
             os.environ["EXT_FRAC"] = str(f)
             an = Analog(banned=banned, external=f > 0)
         cov = coverage(an, jobs)
-        for d in DELTAS:
+        for d, gt in [(d, gt) for d in DELTAS for gt in GATES]:
             v, med = score(an, bits, jobs, answers,
-                           ppm=f if MODE == "ppm" else None, delta=d)
+                           ppm=f if MODE == "ppm" else None, delta=d, gate=gt)
+            if len(GATES) > 1:
+                print(f"  gate {gt:g}", end="")
             # MRR among molecules that are actually in the pool. If the extrapolation
             # in section 8 is sound this is flat across fractions; if it rises with f
             # the model is wrong and coverage buys less than the projection claims.
