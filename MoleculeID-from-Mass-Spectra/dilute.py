@@ -57,6 +57,10 @@ SPLITS = os.environ.get("SPLITS", f"{WORK}/splits.npz")
 ORACLE = os.environ.get("FORMULA_ORACLE") == "1"
 # DELTAS sweeps the weight on formula.explained, the fraction of spectrum intensity a
 # candidate's formula can account for (section 12, item 2).
+# TRUE_ADDUCT=1 opens only the first query spectrum's own adduct window, as submit()
+# does with the adduct column the test ships. The index does not store adducts, so it
+# is recovered from the answer's mass; 0 opens every adduct of the polarity.
+TRUE_ADDUCT = os.environ.get("TRUE_ADDUCT") == "1"
 DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
 
 
@@ -85,6 +89,9 @@ def build_jobs():
         cls, rows = int(qclass[m][0]), query[m]
         spectra = spectra_of(ix, rows)
         add = pos if bool(ix["ion"][rows[0]]) else neg
+        if TRUE_ADDUCT:
+            mass = formula.counts(ix["smiles"][rows[0]].decode())[1]
+            add = [min(add, key=lambda a: abs(mass + ADDUCTS[a][0] - spectra[0][2]))]
         spec, smiles = se.score_structures(spectra)
         jobs.append((cls, k, spec, smiles, float(spectra[0][2]), add,
                      query_fp(model, spectra), spectra))

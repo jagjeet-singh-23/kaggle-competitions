@@ -179,9 +179,14 @@ def submit(path=None, gamma=GAMMA):
         spectra = [library.trim(a, b, p) + (p,)
                    for a, b, p in zip(g.ms2_mzs, g.ms2_normalized_intensities,
                                       g.precursor_mz)]
-        add = [a for a in pd.unique(g.adduct) if a in ADDUCTS] or ["[M+H]+"]
         spec, smiles = se.score_structures(spectra)
-        pm = float(spectra[0][2])
+        # One spectrum's precursor with that spectrum's own adduct: every spectrum
+        # of a molecule shares one neutral mass, and pairing the first precursor
+        # with another spectrum's adduct opens a window ~22 Da off full of decoys.
+        known = [i for i, a in enumerate(g.adduct) if a in ADDUCTS]
+        i = known[0] if known else 0
+        pm = float(spectra[i][2])
+        add = [g.adduct.iloc[i]] if known else ["[M+H]+"]
         total, sm = dict(spec), dict(smiles)
         for k, v in an.propagate(spec, pm, add).items():
             total[k] = total.get(k, 0.0) + BETA * v
