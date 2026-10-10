@@ -547,3 +547,29 @@ and class 2/3 gain cancel. Gamma stays 32.
 Two lessons. Every eval/test mismatch is a place a bug can hide, and this one was worth
 more than all the modelling since v4. And the real test rewards a smaller pool even
 more than held-out does: a fix touching 27% of molecules gained 0.023.
+
+## 15. Held-out does not predict scoring weights
+
+A gated gamma — keep 32 when the best spectral match averages cosine >= 0.7 per
+spectrum, use 128 otherwise — was the best held-out result since the eval was fixed:
+0.2013 -> **0.2168**, class 1 0.926 -> 0.919, class 2 0.380 -> 0.492 (gates 0.5-0.9
+give 0.2130-0.2172, a plateau). On the leaderboard (v11) it scored **0.236**, exactly
+v9. With v10 that is two weight changes in a row that held-out ranked +0.004 and
++0.016 and the leaderboard ranked 0. Gating is kept in `dilute.py` (`GATES`) and taken
+out of `submit()`.
+
+Two reasons the held-out eval cannot see this:
+
+* **The local `test.parquet` is a placeholder.** Every one of its spectra has an
+  identical twin in `enveda-180`, and `submit()` ranks the twin's structure first for
+  97.5% of molecules; scored on that file MRR would be ~0.97, not 0.236. Kaggle swaps
+  in the hidden test when it scores. Nothing about the hidden test (adduct mix, mass
+  range, match strength) can be read off the local file.
+* **Held-out class 1 is not drawn from the test's chemistry.** The dummy test is all
+  `enveda-180`, so the hidden test is very likely Enveda in-house data too. Held-out
+  class 2 and 3 queries are 70-74% `enveda-180`, but class 1 queries contain none:
+  pluskal_ms2 39%, gnps 22%, riken 12%, mona 11%. The class 1 side of every gamma
+  trade-off was measured on public-library spectra.
+
+The next eval change is therefore a class 1 drawn from `enveda-180` queries whose
+structure also has spectra elsewhere, before any more weights are tuned against it.

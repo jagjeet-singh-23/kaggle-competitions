@@ -33,11 +33,6 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 DATA, WORK = library.DATA, library.WORK
 TOP_K = 25
 GAMMA = float(os.environ.get("GAMMA", 32.0))   # see submit(): chosen on the solved class mix
-# Gated gamma (RESULTS.md section 15): a molecule whose best spectral match averages
-# a cosine of GATE per spectrum is a library hit and keeps GAMMA; the rest get
-# GAMMA_HI, where the fingerprint has to choose among isomers. Held-out 0.2013 -> 0.2168.
-GATE = float(os.environ.get("GATE", 0.7))
-GAMMA_HI = float(os.environ.get("GAMMA_HI", 128.0))
 GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", "0,4,8,16,32,64").split(","))
 
 
@@ -197,15 +192,14 @@ def submit(path=None, gamma=GAMMA):
             total[k] = total.get(k, 0.0) + BETA * v
             sm.setdefault(k, an.smiles[an.row[k]])
         pool = an.pool(pm, add)
-        g = gamma if max(spec.values(), default=0.0) / len(spectra) >= GATE else GAMMA_HI
-        if g and len(pool):
+        if gamma and len(pool):
             fpq = query_fp(model, spectra)
             B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
             inter = B @ fpq
             t = inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9)
             for r, v in zip(pool, t):
                 k = an.key[r]
-                total[k] = total.get(k, 0.0) + g * float(v)
+                total[k] = total.get(k, 0.0) + gamma * float(v)
                 sm.setdefault(k, an.smiles[r])
         top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
         cands = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q] for q, _ in top]
