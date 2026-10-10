@@ -18,6 +18,7 @@ also tests the 0.360 ranking-quality figure section 8 derived from a single poin
 
     GAMMA=64 MIN_AVAIL_MB=3000 ../guard.sh python3 -u dilution.py
 """
+import functools
 import os
 import sys
 
@@ -50,6 +51,17 @@ MIX = {1: 0.140, 2: 0.126, 3: 0.735}
 # SPLITS=data/splits_cov3.npz points this at the variant whose class 3 is fully
 # covered by the external database, where class3 MRR *is* the ranking quality.
 SPLITS = os.environ.get("SPLITS", f"{WORK}/splits.npz")
+# FORMULA_ORACLE=1 drops every candidate whose formula differs from the answer's: the
+# ceiling a perfect formula filter would reach (RESULTS.md section 12, item 1).
+ORACLE = os.environ.get("FORMULA_ORACLE") == "1"
+
+
+@functools.lru_cache(maxsize=None)
+def formula(smi):
+    from rdkit import Chem
+    from rdkit.Chem.rdMolDescriptors import CalcMolFormula
+    m = Chem.MolFromSmiles(smi)
+    return CalcMolFormula(m) if m is not None else None
 
 
 def build_jobs():
@@ -78,7 +90,7 @@ def build_jobs():
 
 
 def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None):
-    preds, sizes = {1: {}, 2: {}, 3: {}}, []
+    preds, sizes, kept = {1: {}, 2: {}, 3: {}}, [], []
     for cls, k, spec, smiles, pm, add, fpq in jobs:
         total, sm = dict(spec), dict(smiles)
         kw = {} if ppm is None else {"ppm": ppm}
@@ -95,9 +107,16 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None):
                 key_ = an.key[r]
                 total[key_] = total.get(key_, 0.0) + gamma * float(v)
                 sm.setdefault(key_, an.smiles[r])
-        top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
-        preds[cls][k] = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q]
-                         for q, _ in top]
+        top = sorted(total.items(), key=lambda kv: -kv[1])
+        top = [(sm[q].decode() if isinstance(sm[q], bytes) else sm[q]) for q, _ in top]
+        if ORACLE:
+            want = formula(answers[cls][k])
+            n = len(top)
+            top = [t for t in top if formula(t) == want]
+            kept.append(len(top) / max(n, 1))
+        preds[cls][k] = top[:TOP_K]
+    if kept:
+        print(f"  oracle keeps a median {np.median(kept):.1%} of candidates", flush=True)
     return [mrr(preds[c], answers[c]) for c in (1, 2, 3)], int(np.median(sizes))
 
 

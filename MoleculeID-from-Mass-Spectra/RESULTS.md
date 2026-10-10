@@ -419,6 +419,21 @@ Ranked by expected value, with the measurements that rank them:
    restrict the held-out evaluation to candidates sharing the answer's molecular
    formula and see what class 3 becomes. That is the ceiling a perfect formula filter
    would reach, and it says whether formula prediction is worth building.
+
+   *Measured* (`FORMULA_ORACLE=1 python3 dilute.py`, COCONUT, gamma 32):
+
+   | split | oracle | class1 | class2 | class3 | quality | kept |
+   |---|---|---|---|---|---|---|
+   | ordinary | off | 0.8984 | 0.3398 | 0.0288 | 0.360 | 100% |
+   | ordinary | on | 0.9529 | 0.4077 | 0.0331 | 0.413 | 13.1% |
+   | covered | off | 0.9029 | 0.3978 | 0.4714 | 0.471 | 100% |
+   | covered | on | 0.9535 | 0.4533 | 0.5417 | 0.542 | 16.4% |
+
+   Removing the 84-87% of candidates with the wrong formula raises quality only 15%:
+   the ranking already pushes them down, and the confusion that costs MRR is between
+   isomers of one formula. Projected onto the real test the ceiling is about +0.02
+   (0.213 -> ~0.233), and a filter that has to infer the formula from fragments gets
+   less. Worth building, but no longer obviously first.
 2. **A formula-consistency term.** A 5 ppm window admits several molecular formulas,
    and only one of them can explain the fragments: a candidate's formula must contain
    every fragment's. Scoring candidates by the fraction of spectrum intensity their
