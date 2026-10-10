@@ -518,3 +518,32 @@ python3 fingerprint.py --selftest  # featuriser and a single-molecule overfit
 `metric.py` is the one to trust on a new machine: RDKit is pinned to 2026.3.3 because
 tautomer canonicalisation is version-dependent, and a different version silently
 changes what counts as a correct answer.
+
+## 14. One adduct window: 0.236
+
+`submit()` paired the first spectrum's precursor with the adducts of *every* spectrum
+of the molecule. 108 of the 400 test molecules carry two adducts, so each of them also
+searched a window ~22 Da away from its real neutral mass, filled only with decoys.
+Taking precursor and adduct from the same spectrum (v9) moved the leaderboard
+**0.213 -> 0.236**, the largest single step in the project, from a quarter of the
+molecules losing a decoy window.
+
+The held-out eval could not see this. It opened every adduct of the polarity for every
+query (median pool 217) while the kernel used the test's adduct column. `dilute.py
+TRUE_ADDUCT=1` recovers the held-out query's adduct from the answer's mass and opens
+only that window, which is what the kernel does:
+
+| eval | pool | class1 | class2 | class3 | LB |
+|---|---|---|---|---|---|
+| every adduct | 217 | 0.8984 | 0.3398 | 0.0288 | 0.1898 |
+| true adduct | 48 | 0.9262 | 0.3802 | 0.0323 | 0.2013 |
+
+Gamma re-tuned on the true-adduct eval: 16 / 32 / 64 / 128 / 256 give 0.1910 /
+0.2013 / 0.2057 / **0.2068** / 0.2041, trading class 1 (0.93 -> 0.78) for class 2
+(0.31 -> 0.54). On the leaderboard gamma 64 (v10) scored **0.235** against 0.236: the
+held-out gain of +0.004 is inside the noise of 400 molecules, and the class 1 loss
+and class 2/3 gain cancel. Gamma stays 32.
+
+Two lessons. Every eval/test mismatch is a place a bug can hide, and this one was worth
+more than all the modelling since v4. And the real test rewards a smaller pool even
+more than held-out does: a fix touching 27% of molecules gained 0.023.
