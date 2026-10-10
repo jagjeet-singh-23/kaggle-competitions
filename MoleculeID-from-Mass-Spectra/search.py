@@ -32,6 +32,11 @@ TOL_DA = 0.01        # peak matching tolerance; timsTOF is well inside this
 PPM = 10.0           # precursor window
 BINS = 200_000       # 0.01 Da bins up to m/z 2000
 TOP_K = 25
+# SIM=rev normalises the query only over bins the reference has a peak in, so a
+# 230-peak query is not charged for peaks a 10-peak reference never recorded
+# (RESULTS.md section 4). Reverse alone lets one shared base peak score ~1, so
+# SIM=hybrid averages it with the plain cosine.
+SIM = os.environ.get("SIM", "cos")
 
 
 class Searcher:
@@ -89,9 +94,16 @@ class Searcher:
         s = self.scratch
         s[qb[ok]] = q[ok]                          # scatter the query onto the bin axis
         cb = self.bin[rows]
-        sim = np.where(cb >= 0, s[np.clip(cb, 0, BINS + 1)], 0.0) * self.it[rows]
+        qv = np.where(cb >= 0, s[np.clip(cb, 0, BINS + 1)], 0.0)
         s[qb[ok]] = 0.0                            # clear only what was written
-        return rows, sim.sum(axis=1)
+        cos = (qv * self.it[rows]).sum(axis=1)
+        if SIM == "cos":
+            return rows, cos
+        # Query energy on the reference's peaks; shortcut: a reference with two peaks
+        # in one bin counts that query bin twice, rare at 0.01 Da.
+        qn = np.sqrt((qv * qv * (self.it[rows] > 0)).sum(axis=1))
+        rev = np.where(qn > 0, cos / np.maximum(qn, 1e-12), 0.0).astype(np.float32)
+        return rows, rev if SIM == "rev" else (cos + rev) / 2
 
     def rank(self, spectra):
         """spectra: list of (mzs, ints, precursor) for one molecule -> top-25 SMILES."""
@@ -226,6 +238,17 @@ def selftest():
         rows, sim = se.score(mz[7, :8], it[7, :8].astype(np.float32), 350.0)
         assert rows[np.argmax(sim)] == 7, "a spectrum must match itself best"
         assert 0.99 < sim.max() <= 1.0 + 1e-5, f"self-cosine was {sim.max():.4f}"
+        # Reverse ignores query peaks the reference lacks: add junk peaks to the query
+        # and its reverse score against row 7 must stay ~1 while the cosine drops.
+        global SIM
+        jm = np.concatenate([mz[7, :8], [400.0, 410.0, 420.0]]).astype(np.float32)
+        ji = np.concatenate([it[7, :8].astype(np.float32), [1.0, 1.0, 1.0]])
+        for mode in ("cos", "rev"):
+            SIM = mode
+            r, v = se.score(jm, ji, 350.0)
+            v7 = float(v[list(r).index(7)])
+            assert (v7 > 0.99) == (mode == "rev"), f"{mode} on padded query: {v7:.4f}"
+        SIM = "cos"
         top = se.rank([(mz[7, :8], it[7, :8].astype(np.float32), 350.0)])
         assert top[0] == "c1ccccc1", top[:2]
         assert len(top) == TOP_K

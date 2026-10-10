@@ -434,6 +434,33 @@ Ranked by expected value, with the measurements that rank them:
    isomers of one formula. Projected onto the real test the ceiling is about +0.02
    (0.213 -> ~0.233), and a filter that has to infer the formula from fragments gets
    less. Worth building, but no longer obviously first.
+
+   *Then built (item 2) and measured, and it captures ~5% of that ceiling.*
+   `formula.explained` scores the fraction of intensity whose fragments are
+   sub-formulas of the candidate's ion; `DELTAS=0,4,8,16,32 python3 dilute.py`
+   gives LB 0.1898 / 0.1904 / **0.1907** / 0.1901 / 0.1834. The reason is
+   discrimination, measured on covered class 3 (answer vs 30 wrong-formula
+   candidates from the same window, n=190):
+
+   | fragment tol | answer explains | wrong explains | AUC |
+   |---|---|---|---|
+   | 0.002 Da | 0.727 | 0.658 | 0.590 |
+   | 0.005 Da | 0.827 | 0.774 | 0.608 |
+   | 0.01 Da | 0.862 | 0.819 | 0.587 |
+
+   Weighting peaks by m/z, (m/z)^2 or keeping only peaks above half the precursor
+   leaves AUC at 0.60-0.61. Small fragments are sub-formulas of almost every
+   formula in the window, and the true formula itself leaves 15-25% of intensity
+   unexplained (isotopes, noise, rearrangements). +0.0009 is inside the noise, so
+   it is not shipped; `formula.py` stays as the measurement.
+
+   *Reverse/hybrid cosine (item 3) also measured, and lost on held-out:*
+   `SIM=rev` LB 0.1700, `SIM=hybrid` 0.1840, against cosine 0.1898. Hybrid lifts
+   class 1 0.8984 -> 0.9043 but costs class 2 0.3398 -> 0.2880: analog propagation
+   weights analogs by seed score, and reverse inflates references with few peaks.
+   The held-out queries are library spectra (<=64 peaks) and cannot show the
+   230-peak asymmetry of the real test, so this is not a verdict on the test, but
+   there is no held-out evidence to ship it. `SIM` defaults to `cos`.
 2. **A formula-consistency term.** A 5 ppm window admits several molecular formulas,
    and only one of them can explain the fragments: a candidate's formula must contain
    every fragment's. Scoring candidates by the fraction of spectrum intensity their

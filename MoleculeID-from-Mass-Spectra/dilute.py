@@ -27,6 +27,7 @@ import numpy as np
 import library
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
+import formula
 from fpsearch import load_model, query_fp, TOP_K
 from metric import mrr
 from search import Searcher, spectra_of
@@ -54,10 +55,13 @@ SPLITS = os.environ.get("SPLITS", f"{WORK}/splits.npz")
 # FORMULA_ORACLE=1 drops every candidate whose formula differs from the answer's: the
 # ceiling a perfect formula filter would reach (RESULTS.md section 12, item 1).
 ORACLE = os.environ.get("FORMULA_ORACLE") == "1"
+# DELTAS sweeps the weight on formula.explained, the fraction of spectrum intensity a
+# candidate's formula can account for (section 12, item 2).
+DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
 
 
 @functools.lru_cache(maxsize=None)
-def formula(smi):
+def formula_of(smi):
     from rdkit import Chem
     from rdkit.Chem.rdMolDescriptors import CalcMolFormula
     m = Chem.MolFromSmiles(smi)
@@ -83,15 +87,26 @@ def build_jobs():
         add = pos if bool(ix["ion"][rows[0]]) else neg
         spec, smiles = se.score_structures(spectra)
         jobs.append((cls, k, spec, smiles, float(spectra[0][2]), add,
-                     query_fp(model, spectra)))
+                     query_fp(model, spectra), spectra))
         answers[cls][k] = ix["smiles"][rows[0]].decode()
     del ix, se, model
     return jobs, answers, sp["banned"], bits
 
 
-def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None):
+_explained = {}
+
+
+def explained(j, k, smi, spectra, add):
+    """Mean over a molecule's spectra, memoised so a DELTAS sweep computes it once."""
+    if (j, k) not in _explained:
+        _explained[j, k] = float(np.mean([formula.explained(smi, mz, it, p, add)
+                                          for mz, it, p in spectra]))
+    return _explained[j, k]
+
+
+def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0):
     preds, sizes, kept = {1: {}, 2: {}, 3: {}}, [], []
-    for cls, k, spec, smiles, pm, add, fpq in jobs:
+    for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
         total, sm = dict(spec), dict(smiles)
         kw = {} if ppm is None else {"ppm": ppm}
         for key_, v in an.propagate(spec, pm, add, **kw).items():
@@ -107,12 +122,16 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None):
                 key_ = an.key[r]
                 total[key_] = total.get(key_, 0.0) + gamma * float(v)
                 sm.setdefault(key_, an.smiles[r])
+        if delta:
+            for key_ in total:
+                smi = sm[key_].decode() if isinstance(sm[key_], bytes) else sm[key_]
+                total[key_] += delta * explained(j, key_, smi, spectra, add)
         top = sorted(total.items(), key=lambda kv: -kv[1])
         top = [(sm[q].decode() if isinstance(sm[q], bytes) else sm[q]) for q, _ in top]
         if ORACLE:
-            want = formula(answers[cls][k])
+            want = formula_of(answers[cls][k])
             n = len(top)
-            top = [t for t in top if formula(t) == want]
+            top = [t for t in top if formula_of(t) == want]
             kept.append(len(top) / max(n, 1))
         preds[cls][k] = top[:TOP_K]
     if kept:
@@ -129,7 +148,7 @@ def coverage(an, jobs):
 
 def main():
     jobs, answers, banned, bits = build_jobs()
-    print(f"\n{'frac':>6}{'pool':>8}{'cover3':>9}{'class1':>9}{'class2':>9}"
+    print(f"\n{'frac':>6}{'delta':>7}{'pool':>8}{'cover3':>9}{'class1':>9}{'class2':>9}"
           f"{'class3':>9}{'quality':>9}{'LB':>8}")
     out = []
     an = Analog(banned=banned, external=True) if MODE == "ppm" else None
@@ -138,18 +157,19 @@ def main():
             os.environ["EXT_FRAC"] = str(f)
             an = Analog(banned=banned, external=f > 0)
         cov = coverage(an, jobs)
-        v, med = score(an, bits, jobs, answers,
-                       ppm=f if MODE == "ppm" else None)
+        for d in DELTAS:
+            v, med = score(an, bits, jobs, answers,
+                           ppm=f if MODE == "ppm" else None, delta=d)
+            # MRR among molecules that are actually in the pool. If the extrapolation
+            # in section 8 is sound this is flat across fractions; if it rises with f
+            # the model is wrong and coverage buys less than the projection claims.
+            q = v[2] / cov if cov else float("nan")
+            lb = sum(MIX[c] * v[i] for i, c in enumerate((1, 2, 3)))
+            print(f"{f:>6g}{d:>7g}{med:>8}{cov:>9.1%}{v[0]:>9.4f}{v[1]:>9.4f}"
+                  f"{v[2]:>9.4f}{q:>9.3f}{lb:>8.4f}", flush=True)
+        out.append((f, med, cov, v, q))
         if MODE != "ppm":
             del an
-        # MRR among molecules that are actually in the pool. If the extrapolation in
-        # section 8 is sound this is flat across fractions; if it rises with f the
-        # model is wrong and coverage buys less than the projection claims.
-        q = v[2] / cov if cov else float("nan")
-        lb = sum(MIX[c] * v[i] for i, c in enumerate((1, 2, 3)))
-        print(f"{f:>6g}{med:>8}{cov:>9.1%}{v[0]:>9.4f}{v[1]:>9.4f}{v[2]:>9.4f}"
-              f"{q:>9.3f}{lb:>8.4f}", flush=True)
-        out.append((f, med, cov, v, q))
 
     # Slope of each class against log2(pool). A ranking loses to distractors
     # logarithmically, so this is the coefficient an extrapolation needs, and fitting
