@@ -573,3 +573,42 @@ Two reasons the held-out eval cannot see this:
 
 The next eval change is therefore a class 1 drawn from `enveda-180` queries whose
 structure also has spectra elsewhere, before any more weights are tuned against it.
+
+## 16. The gamma gain lives in class 2, and needs the answer in the index
+
+Section 15's eval change, built: `C1_LIB=enveda-180 SPLIT_OUT=data/splits_c1env.npz
+python3 split.py` draws class 1 from the 2,255 multi-library structures that
+`enveda-180` measured and holds out the `enveda-180` spectra. The fingerprint model was
+retrained without this split's spectra (`SPLITS=... FP_MODEL=data/fpmodel_c1env.pt
+python3 fingerprint.py --train --holdout`, hidden 2048, defect, 6 epochs, val tanimoto
+0.307): `fpmodel.pt` excludes only `splits.npz`'s rows, and 95% of the new split's
+query spectra were in its training set. The same holds for `splits_cov3.npz` (90% of
+its queries), so class 2 and 3 numbers measured on that split with `fpmodel.pt` are
+inflated.
+
+| | class 1 | class 2 | class 3 | predicted LB | actual LB |
+|---|---|---|---|---|---|
+| gamma 32 | 0.8984 | 0.3781 | 0.0195 | 0.1877 | 0.236 (v9) |
+| gamma 64 | 0.8918 | 0.4635 | 0.0204 | 0.1983 | 0.235 (v10) |
+| gated 0.7 / 128 | 0.8726 | 0.5102 | 0.0211 | 0.2019 | 0.236 (v11) |
+
+An Enveda class 1 does not fix it. Class 1 barely moves; the predicted gain is class 2
+(0.378 -> 0.510, +0.017 of LB), and the leaderboard shows none of it.
+
+Held-out class 2 structures are always in the candidate list, because they come from
+the index's own 264k structures. With them banned as well (`C2_BANNED=1`), so a class 2
+answer is reachable only through COCONUT (18 of 200):
+
+| | class 1 | class 2 | class 3 | predicted LB |
+|---|---|---|---|---|
+| gamma 32 | 0.8984 | 0.0360 | 0.0195 | 0.1446 |
+| gamma 64 | 0.8918 | 0.0365 | 0.0204 | 0.1445 |
+| gated 0.7 / 128 | 0.8726 | 0.0362 | 0.0211 | 0.1422 |
+
+The three now tie within 0.0024, as the leaderboard does. That is weak evidence: class
+2 is flat by construction once its answers are mostly unreachable, and the absolute
+level (0.145) is further from 0.236 than the unbanned eval's (0.188). The truth sits
+between the two variants. What it settles is narrower: **a held-out gain that comes
+from class 2 with the answer in the index does not reach the leaderboard.** A scoring
+change must improve the `C2_BANNED=1` eval, or class 1 / class 3, to be worth a
+submission.

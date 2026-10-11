@@ -34,7 +34,7 @@ from analog import DESC, FP_BITS
 DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = library.DATA
 WORK = library.WORK
-MODEL = f"{WORK}/fpmodel.pt"
+MODEL = os.environ.get("FP_MODEL", f"{WORK}/fpmodel.pt")
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
 HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         ep = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--epochs=")), 6)
         drop = None
         if "--holdout" in sys.argv:
-            drop = np.load(f"{WORK}/splits.npz", allow_pickle=True)["drop"]
+            drop = np.load(os.environ.get("SPLITS", f"{WORK}/splits.npz"), allow_pickle=True)["drop"]
             print(f"excluding {len(drop):,} held-out spectra from training")
         train(epochs=ep, limit=lim, drop=drop)
     else:

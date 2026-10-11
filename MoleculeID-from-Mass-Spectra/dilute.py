@@ -74,6 +74,10 @@ SPEC_PPM = float(os.environ.get("SPEC_PPM", 10.0))
 GATES = tuple(float(x) for x in os.environ.get("GATES", "2").split(","))
 GAMMA_HI = float(os.environ.get("GAMMA_HI", 128.0))
 DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
+# C2_BANNED=1 also removes class 2 answers from the candidate list: tests whether the
+# held-out class 2 gain from a higher gamma, absent on the leaderboard, needs the
+# answer to sit in the index's own structures.
+C2_BANNED = os.environ.get("C2_BANNED") == "1"
 
 
 @functools.lru_cache(maxsize=None)
@@ -86,7 +90,9 @@ def formula_of(smi):
 
 def build_jobs():
     """Spectral scores and predicted fingerprints, which do not depend on the pool."""
-    sp = np.load(SPLITS, allow_pickle=True)
+    sp = dict(np.load(SPLITS, allow_pickle=True))
+    if C2_BANNED:
+        sp["banned"] = np.union1d(sp["banned"], sp["qkey"][sp["qclass"] == 2])
     ix = library.load()
     se = Searcher(drop=sp["drop"], banned=sp["banned"], ix=ix)
     model, bits = load_model()

@@ -38,6 +38,10 @@ OUT = os.environ.get("SPLIT_OUT", f"{WORK}/splits.npz")
 # covered in the ordinary split. Separating the two is the whole question for a
 # database expansion: coverage is what it buys, dilution is what it costs.
 C3_COVERED = os.environ.get("C3_COVERED") == "1"
+# C1_LIB=enveda-180 draws class 1 only from structures that library measured, and
+# holds out that library's spectra. The ordinary class 1 has no enveda-180 queries
+# at all, and the hidden test is enveda's (RESULTS.md section 15).
+C1_LIB = os.environ.get("C1_LIB", "").encode()
 
 N_PER_CLASS = 200        # held-out structures per novelty class
 MAX_SPECTRA = 4          # queries per molecule; the real test has median 3
@@ -83,7 +87,12 @@ def build(seed=0):
     single = np.flatnonzero((n_lib == 1) & (n_spec >= 1))
 
     pick = lambda pool, k: rng.choice(pool, min(k, len(pool)), replace=False)
-    c1 = pick(multi, N_PER_CLASS)
+    if C1_LIB:
+        multi_l = np.array([gi for gi in multi if C1_LIB in lib[groups[gi]]])
+        print(f"{len(multi_l):,} multi-library structures include {C1_LIB.decode()}")
+        c1 = pick(multi_l, N_PER_CLASS)
+    else:
+        c1 = pick(multi, N_PER_CLASS)
     rest = np.setdiff1d(np.r_[multi, single], c1)
     if C3_COVERED:
         import external
@@ -103,7 +112,7 @@ def build(seed=0):
             g = groups[gi]
             if cls == 1:
                 # Hold out one library's spectra; the others remain findable.
-                held = rng.choice(np.unique(lib[g]))
+                held = C1_LIB or rng.choice(np.unique(lib[g]))
                 q = g[lib[g] == held]
             else:
                 q = g
