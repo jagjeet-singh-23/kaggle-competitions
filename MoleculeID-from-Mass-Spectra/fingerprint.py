@@ -35,6 +35,16 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 DATA = library.DATA
 WORK = library.WORK
 MODEL = os.environ.get("FP_MODEL", f"{WORK}/fpmodel.pt")
+# FP_INIT continues from a checkpoint trained on the same drop set (same bits and
+# width), so more epochs cost only the extra ones. FP_COSINE decays lr to 0 over the run.
+INIT = os.environ.get("FP_INIT")
+COSINE = os.environ.get("FP_COSINE") == "1"
+# FP_RANK adds a ranking loss: softmax over soft tanimoto against the spectrum's own
+# 5 ppm pool, answer as target. BCE scores every bit alike; isomers share most bits,
+# so only a loss over the pool targets the ones that separate them (RESULTS.md 18-20).
+RANK = float(os.environ.get("FP_RANK", 0))
+TAU = float(os.environ.get("FP_TAU", 0.05))
+RANK_K = 64          # candidates per spectrum in training; the median pool is ~50
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
 HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
@@ -129,6 +139,68 @@ def load_training(drop=None):
     return (ix["mz"][keep], ix["it"][keep], ix["precursor"][keep], rows[keep], fp)
 
 
+class Pools:
+    """The inference candidate pool (index + external, 5 ppm) around each training
+    structure. The split's banned structures are never candidates: the external merge
+    lets class 3 answers back into Analog, and as negatives they would leak."""
+
+    def __init__(self):
+        from analog import Analog
+        banned = np.load(os.environ.get("SPLITS", f"{WORK}/splits.npz"),
+                         allow_pickle=True)["banned"]
+        self.an = an = Analog(banned=banned)
+        with np.load(DESC) as d:
+            key, mass = d["key"], d["mass"]
+        i = np.searchsorted(an.row.sorted, key).clip(max=len(an.row.sorted) - 1)
+        self.arow = np.where(an.row.sorted[i] == key, an.row.order[i], -1)
+        self.lo = np.searchsorted(an.msorted, mass * (1 - 5e-6))
+        self.hi = np.searchsorted(an.msorted, mass * (1 + 5e-6))
+        self.ok = ~np.isin(an.key, banned)
+
+    def batch(self, rows, bits, rng, k=RANK_K):
+        """Candidate bits (n, k, bits) with the answer at column 0, and a pad mask."""
+        idx = np.empty((len(rows), k), np.int64)
+        mask = np.zeros((len(rows), k), bool)
+        for j, s in enumerate(rows):
+            a = self.arow[s]
+            neg = self.an.order[self.lo[s]:self.hi[s]]
+            neg = neg[self.ok[neg] & (neg != a)]
+            if len(neg) > k - 1:
+                neg = rng.choice(neg, k - 1, replace=False)
+            idx[j] = a
+            idx[j, 1:1 + len(neg)] = neg
+            mask[j, :1 + len(neg)] = True
+        C = np.unpackbits(self.an.fp[idx], axis=-1)[..., bits].astype(np.float32)
+        return torch.tensor(C), torch.tensor(mask)
+
+
+def pool_scores(p, C, mask):
+    """Soft tanimoto of predicted probabilities against each candidate, as inference
+    scores them (dilute.py, analog term); padding gets -inf."""
+    inter = torch.einsum("bkn,bn->bk", C, p)
+    s = inter / (C.sum(-1) + p.sum(-1, keepdim=True) - inter).clamp_min(1e-9)
+    return s.masked_fill(~mask, float("-inf"))
+
+
+def rank_loss(logits, C, mask):
+    s = pool_scores(torch.sigmoid(logits), C, mask)
+    return nn.functional.cross_entropy(s / TAU, torch.zeros(len(s), dtype=torch.long))
+
+
+def pool_mrr(model, mz, it, pm, rows, bits, idx, pools, n=2000, chunk=128):
+    """MRR of the answer within its pool on held-out structures: the number class 3
+    ranking quality tracks, unlike mean tanimoto (RESULTS.md 18)."""
+    idx = idx[:n]
+    P = torch.tensor(predict(model, mz[idx], it[idx], pm[idx]))
+    rng = np.random.default_rng(1)
+    rr = []
+    for i in range(0, len(idx), chunk):
+        C, M = pools.batch(rows[idx[i:i + chunk]], bits, rng, k=256)
+        s = pool_scores(P[i:i + chunk], C, M)
+        rr.append(1.0 / (1 + (s[:, 1:] > s[:, :1]).sum(1)).float())
+    return float(torch.cat(rr).mean())
+
+
 def choose_bits(fp, rows):
     """Bits that are neither almost always on nor almost always off.
 
@@ -164,7 +236,22 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
               f"({len(val_struct):,} held-out structures)", flush=True)
 
     model = Net(n_features(), len(bits), hidden=HIDDEN)
+    if INIT:
+        ck = torch.load(INIT, weights_only=False)
+        assert np.array_equal(ck["bits"], bits) and ck["hidden"] == HIDDEN and ck["defect"] == DEFECT, \
+            "FP_INIT was trained on a different drop set or shape"
+        model.load_state_dict(ck["state"])
+        print(f"continuing from {INIT}", flush=True)
+    pools = None
+    if RANK:
+        pools = Pools()
+        assert (pools.arow[np.unique(rows)] >= 0).all(), "a training structure is not a candidate"
+        if INIT and not quiet:
+            print(f"  epoch 0  pool-MRR {pool_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}",
+                  flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    steps = epochs * -(-len(tr) // batch)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps) if COSINE else None
     lossf = nn.BCEWithLogitsLoss()
     t0 = time.time()
     for ep in range(epochs):
@@ -176,9 +263,14 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
             X = torch.tensor(featurise(mz[b], it[b], pm[b]))
             Y = torch.tensor(unpack(fp, rows[b], bits))
             opt.zero_grad()
-            l = lossf(model(X), Y)
+            out = model(X)
+            l = lossf(out, Y)
+            if pools:
+                l = l + RANK * rank_loss(out, *pools.batch(rows[b], bits, rng))
             l.backward()
             opt.step()
+            if sched:
+                sched.step()
             tot += l.item() * len(b)
         # Checkpoint every epoch. A six-epoch run is two and a half hours and the
         # memory guard killed one at epoch five, losing all of it because the only
@@ -187,7 +279,10 @@ def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
         if not quiet:
             print(f"  epoch {ep + 1}/{epochs}  loss {tot / len(order):.4f}  "
                   f"tanimoto {'/'.join(f'{x:.4f}' for x in evaluate(model, mz, it, pm, rows, fp, bits, va))}"
-                  f" (model/shuffled/mean-fp)  {(time.time() - t0) / 60:.1f} min  "
+                  f" (model/shuffled/mean-fp)  "
+                  + (f"pool-MRR {pool_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}  "
+                     if pools else "")
+                  + f"{(time.time() - t0) / 60:.1f} min  "
                   f"[saved]", flush=True)
     if not quiet:
         print(f"wrote {MODEL}")
@@ -292,6 +387,14 @@ def selftest():
     with torch.no_grad():
         acc = ((torch.sigmoid(m(X)) > 0.5).float() == Y).float().mean()
     assert acc > 0.95, f"must learn a peak-determined bit, got {acc:.2f}"
+
+    # Ranking loss: low when the prediction matches column 0 (the answer), high when it
+    # matches the decoy. Column 2 pads with a copy of the answer and must not count.
+    C = torch.tensor([[[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 0, 0]]], dtype=torch.float32)
+    M = torch.tensor([[True, True, False]])
+    good, bad = torch.tensor([[9., 9, -9, -9]]), torch.tensor([[-9., -9, 9, 9]])
+    assert rank_loss(good, C, M) < 0.01 < 5 < rank_loss(bad, C, M)
+    assert pool_scores(torch.sigmoid(good), C, M)[0, 2] == float("-inf")
     print("fingerprint self-checks passed")
 
 

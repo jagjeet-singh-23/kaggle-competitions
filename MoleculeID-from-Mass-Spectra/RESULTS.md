@@ -612,3 +612,118 @@ between the two variants. What it settles is narrower: **a held-out gain that co
 from class 2 with the answer in the index does not reach the leaderboard.** A scoring
 change must improve the `C2_BANNED=1` eval, or class 1 / class 3, to be worth a
 submission.
+
+## 17. Leak-free covered class 3: ranking quality is 0.40, not 0.56
+
+One split for both open questions: `C1_LIB=enveda-180 C3_COVERED=1
+SPLIT_OUT=data/splits_c1cov3.npz python3 split.py` (class 1 from enveda-180, class 3 all
+in COCONUT, 200 molecules each). The model was retrained without its 6,590 held-out
+spectra (`FP_MODEL=data/fpmodel_c1cov3.pt`, hidden 2048, defect, 6 epochs, val tanimoto
+0.316, still rising at epoch 6). Same split, same pool (median 53, one adduct window),
+gamma 32, only the model differs:
+
+| model | class 1 | class 2 | class 3 quality | predicted LB |
+|---|---|---|---|---|
+| `fpmodel.pt` (leaky) | 0.8836 | 0.5395 | 0.5574 | 0.6014 |
+| `fpmodel_c1cov3.pt` | 0.8838 | 0.4408 | **0.3970** | 0.4710 |
+| `fpmodel_c1cov3.pt`, `C2_BANNED=1` | 0.8838 | 0.0302 | 0.3970 | 0.4193 |
+
+The leak inflated covered class 3 by +0.16 and class 2 by +0.10; class 1 does not use
+the predicted fingerprint for its answer and is unchanged. **Every class-3 number
+measured with `fpmodel.pt` on a non-`splits.npz` split overstated the model**, including
+section 11's 0.492. Honest isomer ranking among same-mass COCONUT candidates is 0.40 MRR,
+so the fingerprint model has more headroom than the leaky numbers suggested. Predicted LB
+here is meaningless (class 3 is 100% covered by construction); only the class columns count.
+
+## 18. Six more epochs raise tanimoto, not class 3
+
+`FP_INIT=data/fpmodel_c1cov3.pt FP_COSINE=1 FP_MODEL=data/fpmodel_c1cov3_e12.pt
+python3 fingerprint.py --train --holdout`: section 17's model continued for 6 epochs with
+lr cosine-decayed to 0 (12 in all). Val tanimoto 0.316 -> 0.329, loss 0.0595 -> 0.0530.
+Same split and pool as section 17, gamma 32:
+
+| model | class 1 | class 2 | class 3 quality | `C2_BANNED=1` LB |
+|---|---|---|---|---|
+| 6 epochs | 0.8838 | 0.4408 | 0.3970 | 0.4193 |
+| 12 epochs, cosine | 0.8851 | 0.4760 | 0.3885 | 0.4134 |
+
+Class 3 does not move (-0.009 on 200 molecules, inside noise); the only gain is class 2
+with the answer in the index, which section 16 showed does not reach the leaderboard. It
+fails the submission rule. A better average fingerprint is not a better isomer ranking:
+same-mass candidates share most bits, and mean tanimoto is dominated by the bits they
+share. Training longer on the same objective is closed; the next fingerprint change has to
+target the bits that separate isomers.
+
+## 19. Re-weighting bits at inference does not rank isomers better
+
+`d_b` = fraction of 5 ppm pools (19,526 pools around random non-banned structures) in
+which bit b varies; median 0.343. Weighted tanimoto with `w_b = d_b ** alpha`, section
+17's model and split, gamma 32 (alpha 0 reproduces 0.3970 exactly):
+
+| weighting | class 1 | class 2 | class 3 quality |
+|---|---|---|---|
+| none | 0.8838 | 0.4408 | 0.3970 |
+| global, alpha 0.5 | 0.8766 | 0.4322 | 0.3920 |
+| global, alpha 1 | 0.8586 | 0.4241 | 0.3907 |
+| global, alpha 2 | 0.8301 | 0.3994 | 0.3719 |
+| pool-local (only bits that vary in this pool) | 0.8616 | 0.4465 | 0.3973 |
+
+Global weights hurt every class: a bit that is constant in most pools is decisive in the
+few where it varies, and a global weight mutes exactly those. Pool-local masking, which
+keeps every bit that can separate this pool's candidates and nothing else, leaves class 3
+unchanged. The scoring formula is not the bottleneck; the predicted values of the
+separating bits are. Closed at inference; the next step changes the model (a ranking loss
+over the same pools). Code reverted.
+
+## 20. The fingerprint ceiling is 0.95: the gap is all prediction
+
+If the predicted fingerprint were exactly the answer's, only exact bit collisions in the
+5 ppm pool could outrank it (ties scored as expected reciprocal rank under random order):
+
+| set | bits | median pool | answer's bits unique in pool | ceiling MRR |
+|---|---|---|---|---|
+| section 17 class 3 (200) | 1574 kept | 34 | 90.0% | 0.9479 |
+| section 17 class 3 (200) | all 2048 | 34 | 90.0% | 0.9479 |
+| 20k random structures | 1574 kept | 47 | 93.5% | 0.9569 |
+
+The model reaches 0.397 of a possible 0.948. Collisions cost 0.05 and the 474 dropped
+bits cost nothing; the rest is the accuracy of the predicted separating bits.
+
+## 21. A ranking loss over the pool lifts class 3: 0.397 -> 0.449
+
+`FP_RANK=1` adds cross-entropy over the spectrum's own 5 ppm pool (index + COCONUT,
+split's banned structures excluded, up to 64 candidates) on soft tanimoto / tau (0.05),
+answer as target, to the BCE. Fine-tuned from section 17's model for 2 epochs, cosine lr
+(`FP_INIT=data/fpmodel_c1cov3.pt FP_RANK=1 FP_COSINE=1 FP_MODEL=data/fpmodel_c1cov3_rank.pt
+python3 fingerprint.py --train --holdout --epochs=2`, 50 min/epoch). Val pool-MRR (2,000
+held-out spectra, answer's rank in its own pool) 0.531 -> 0.615 -> 0.630; val tanimoto
+0.316 -> 0.325. Same split and pool as section 17, gamma 32:
+
+| model | class 1 | class 2 | class 3 quality | `C2_BANNED=1` LB |
+|---|---|---|---|---|
+| BCE, 6 epochs | 0.8838 | 0.4408 | 0.3970 | 0.4193 |
+| + ranking loss, 2 epochs | 0.8869 | 0.6530 | **0.4486** | **0.4583** |
+
+The first change that moves class 3 on a leak-free split, and it passes the submission
+rule: the `C2_BANNED=1` eval rises and class 1 does not fall. Val pool-MRR moved +0.10 on
+2,000 independent spectra, so the +0.052 on 200 class 3 molecules is not noise. Not tuned:
+lambda 1, tau 0.05, 2 epochs (pool-MRR still rising). The class 2 jump (+0.21) is the
+in-index kind section 16 showed does not reach the leaderboard; it is not counted.
+
+## 22. The shipped model with the ranking loss
+
+`fpmodel.pt` (v9's model, excludes `splits.npz`) fine-tuned exactly as section 21:
+`SPLITS=data/splits.npz FP_INIT=data/fpmodel.pt FP_RANK=1 FP_COSINE=1
+FP_MODEL=data/fpmodel_rank.pt python3 fingerprint.py --train --holdout --epochs=2`
+(~60 min/epoch). Val pool-MRR 0.507 -> 0.647 -> 0.651. On `splits.npz`, for which this
+model is leak-free (gamma 32, one adduct window):
+
+| model | class 1 | class 2 | class 3 (8% covered) | predicted LB | `C2_BANNED=1` LB |
+|---|---|---|---|---|---|
+| `fpmodel.pt` (v9) | 0.8308 | 0.5105 | 0.0356 | 0.2068 | 0.1465 |
+| `fpmodel_rank.pt` | 0.8621 | 0.6740 | 0.0568 | 0.2474 | 0.1677 |
+
+Every class rises, and the `C2_BANNED=1` eval by +0.021. Class 1 gains too (+0.031):
+a fingerprint that ranks the answer above its isomers also helps when the library match
+is weak. Class 3 is 16 covered molecules here, so its number is noise; section 21 is the
+class 3 evidence.
