@@ -727,3 +727,9 @@ Every class rises, and the `C2_BANNED=1` eval by +0.021. Class 1 gains too (+0.0
 a fingerprint that ranks the answer above its isomers also helps when the library match
 is weak. Class 3 is 16 covered molecules here, so its number is noise; section 21 is the
 class 3 evidence.
+
+**Leaderboard: v12 = 0.252** (v9/v11 0.236), the first gain since the adduct-window fix.
+The per-class estimate made before submitting was +0.006 to +0.011 (class 1 from the
+Enveda split, class 3 scaled by 12-15% coverage, class 2 only through COCONUT); the
+actual +0.016 is above it, so at least one of those three was too conservative. The
+`C2_BANNED=1` delta (+0.021) was the closer predictor this time.
