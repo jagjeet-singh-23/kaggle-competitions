@@ -859,3 +859,28 @@ the training cost: `Pools.batch`, a Python loop per row, not the network.
 `FP_MODEL + ".state"` (model, optimizer, schedule, rng, the epoch's order and position; written
 via fsync + rename). Rerunning the same command resumes from it. A run killed with `kill -9`
 mid-epoch and resumed ends with weights bit-identical to an uninterrupted run.
+
+## 26. Training twice as fast; the 200-molecule eval moves 0.02 between identical runs
+
+**Speed.** A ranking-loss step on the Mac: model forward/backward 50 ms (46%), building the
+candidate tensor 56 ms (51%), the per-row pool loop 1 ms (1%). The cost was unpacking all
+2,048 bits of 256 x 64 candidates and indexing the 1,574 kept ones every batch. `Pools.packed`
+now repacks every candidate's kept bits once (134 MB, 3 s) and `unpack_bytes` unpacks them in
+torch: 56 -> 11 ms, same values. An epoch takes 6.4 min instead of 12.3. Torch threads stay
+at 4: 6-10 threads are slower on the M4 (its efficiency cores).
+
+**Noise floor.** The new tensor is contiguous where the old one (numpy's `[..., bits]`) was
+laid out bits-first, so the einsum sums in a different order and gradients differ in the last
+float bit. Retraining section 21's Mac baseline with nothing else changed:
+
+| run | val pool-MRR | val mol-MRR | class 3 / `C2_BANNED=1` LB, gamma 32 | gamma 128 |
+|---|---|---|---|---|
+| `fpmodel_c1cov3_mac.pt` | 0.6294 | 0.7153 | 0.4066 / 0.4322 | 0.4283 / 0.4459 |
+| `fpmodel_c1cov3_mac_repro.pt` | 0.6297 | 0.7163 | 0.4164 / 0.4385 | 0.4535 / 0.4645 |
+
+Rounding alone moves 200-molecule class 3 by 0.010-0.025 and its LB by 0.006-0.019, while the
+2,000-sample val metrics move 0.001. This is the Linux-vs-Mac class 3 gap of section 24
+(0.4486 vs 0.4283). **A class 3 or LB difference under ~0.025 between two trainings is not
+evidence**; val pool-MRR / mol-MRR is. Sections 24-25 already decided on val MRR (tau 0.0125,
+`FP_MOL`); their eval differences at gamma 32 (-0.014, +0.012) are within this noise, so the
+"keep v12" decision rests on no eval gain being shown, not on a measured loss.

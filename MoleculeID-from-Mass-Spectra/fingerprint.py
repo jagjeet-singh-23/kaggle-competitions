@@ -167,6 +167,19 @@ class Pools:
         self.lo = np.searchsorted(an.msorted, mass * (1 - 5e-6))
         self.hi = np.searchsorted(an.msorted, mass * (1 + 5e-6))
         self.ok = ~np.isin(an.key, banned)
+        self._bits = self._sub = None
+
+    def packed(self, bits):
+        """Candidate fingerprints repacked to the kept bits, built once (134 MB for 1,574
+        bits). Unpacking all 2,048 bits per batch and indexing the kept ones was half
+        of every training step."""
+        if self._bits is None or not np.array_equal(self._bits, bits):
+            fp = self.an.fp
+            self._sub = torch.from_numpy(np.concatenate(
+                [np.packbits(np.unpackbits(fp[i:i + 50000], axis=1)[:, bits], axis=1)
+                 for i in range(0, len(fp), 50000)]))
+            self._bits = bits
+        return self._sub
 
     def batch(self, rows, bits, rng, k=RANK_K):
         """Candidate bits (n, k, bits) with the answer at column 0, and a pad mask."""
@@ -181,8 +194,16 @@ class Pools:
             idx[j] = a
             idx[j, 1:1 + len(neg)] = neg
             mask[j, :1 + len(neg)] = True
-        C = np.unpackbits(self.an.fp[idx], axis=-1)[..., bits].astype(np.float32)
-        return torch.tensor(C), torch.tensor(mask)
+        C = unpack_bytes(self.packed(bits)[torch.from_numpy(idx)], len(bits))
+        return C, torch.tensor(mask)
+
+
+_SHIFTS = torch.arange(7, -1, -1, dtype=torch.uint8)
+
+
+def unpack_bytes(b, n):
+    """np.unpackbits(b, axis=-1, count=n) as float32, in torch: four times faster."""
+    return ((b.unsqueeze(-1) >> _SHIFTS) & 1).flatten(-2)[..., :n].float()
 
 
 def pool_scores(p, C, mask):
@@ -535,6 +556,12 @@ def selftest():
     assert all(1 <= len(g) <= 2 and len(set(r[g])) == 1 for g in G) and len(G) == 3 + 1 + 1
     p = torch.tensor([[1., 0], [3, 2], [5, 4]])
     assert torch.equal(mean_by_group(p, [2, 1]), torch.tensor([[2., 1], [5, 4]]))
+
+    # The torch unpack of repacked candidate bits must equal numpy's, bit order included.
+    raw = np.random.default_rng(1).integers(0, 256, (3, 5, 4), dtype=np.uint8)
+    for n in (32, 27, 1):
+        want = np.unpackbits(raw, axis=-1, count=n).astype(np.float32)
+        assert torch.equal(unpack_bytes(torch.from_numpy(raw), n), torch.from_numpy(want)), n
     print("fingerprint self-checks passed")
 
 

@@ -1,6 +1,6 @@
 # Handoff — CASMI 2026 (as of 2026-10-17)
 
-Read RESULTS.md §11–25 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–26 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
@@ -39,8 +39,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - Inference-side bit weighting, global or pool-local: no gain (§19).
 - Fingerprint ceiling: 0.948 within the pool, so the gap is prediction, not bit collisions (§20).
 - Ranking loss tau 0.1: worse in every column (§23).
-- Ranking loss tau 0.025 / 0.0125 / 0.00625, lambda 3, 4 epochs: worse than tau 0.05 at gamma 32; lr 1e-4 worse at
-  any gamma (§24).
+- Ranking loss tau 0.025 / 0.0125 / 0.00625, lambda 3, 4 epochs: no better than tau 0.05 at gamma 32 (eval
+  gaps within the §26 noise); lr 1e-4 worse at any gamma (§24).
 - Ranking loss on the molecule-averaged prediction (`FP_MOL=4`, lambda 1 or 4): val mol-MRR below the per-spectrum
   loss; its +0.018 class 3 on 200 molecules disagrees with it (§25).
 
@@ -52,7 +52,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   class 2, and class 1 must not fall. Absolute predicted LB is not calibrated (0.145–0.188 vs 0.236); use deltas only.
 - Class 3 quality needs a **covered** split and a **leak-free** model: `splits_c1cov3.npz` + `fpmodel_c1cov3.pt`
   (baseline 0.397; leaky model on the same split said 0.557). Class 3 of `splits.npz` is 16 covered molecules: noise.
-- Differences under ~0.015 in class 3 on 200 molecules are noise; val pool-MRR (2,000 spectra) is the tie-breaker.
+- **Retraining the same config moves 200-molecule class 3 by up to 0.025 and its LB by up to 0.019** (float rounding
+  alone, §26); val pool-MRR / mol-MRR moves 0.001. Judge model changes on val MRR; class 3 under ~0.025 is noise.
 - The v12 estimate from held-out deltas was +0.006..+0.011; the real gain was +0.016. `C2_BANNED=1` delta (+0.021)
   was the closer predictor.
 
@@ -80,7 +81,7 @@ A model is only valid on the split whose rows it excluded. `fpmodel.pt` saw 90% 
 SPLITS=data/<split>.npz FP_MODEL=data/fpmodel_<name>.pt FP_HIDDEN=2048 FP_DEFECT=1 \
   MIN_AVAIL_MB=2500 ../guard.sh python3 fingerprint.py --train --holdout
 
-# ranking-loss fine-tune (~50-60 min/epoch on the Linux box, ~12.5 on the M4 Mac)
+# ranking-loss fine-tune (~50-60 min/epoch on the Linux box, ~6.4 on the M4 Mac since §26)
 SPLITS=data/splits_c1cov3.npz FP_INIT=data/fpmodel_c1cov3.pt FP_MODEL=data/fpmodel_c1cov3_<name>.pt \
   FP_RANK=1 FP_TAU=0.05 FP_COSINE=1 FP_HIDDEN=2048 FP_DEFECT=1 MIN_AVAIL_MB=2500 \
   ../guard.sh python3 fingerprint.py --train --holdout --epochs=2
@@ -127,7 +128,7 @@ Local `test.parquet` is a placeholder copied from train: use it only to check `s
 
 Mac mini (Apple M4, 16 GB; the training machine since 2026-10-17):
 - Venv at the repo root: `../.venv/bin/python` (Python 3.12, numpy 2.5, rdkit 2026.3.3, torch 2.14). CPU only.
-- Ranking-loss epoch 12.5 min (6.5 with `FP_MOL`); `dilute.py` FRACS=1 ~25 s.
+- Ranking-loss epoch 6.4 min (§26; was 12.5); `dilute.py` FRACS=1 ~25 s. Torch threads 4 is fastest.
 - No battery, so a power cut restarts it (`autorestart` is on; no UPS). Keep job scripts in `data/jobs/`,
   not `/tmp` (wiped on reboot), and run everything under `caffeinate -ims`: without it the Mac idle-sleeps
   mid-run (17 min lost on 2026-10-17).
