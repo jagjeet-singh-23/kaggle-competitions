@@ -69,6 +69,10 @@ os.environ["CASMI_DATA"] = COMP          # read-only competition files
 os.environ["CASMI_WORK"] = "/tmp/casmi"  # writable scratch, not committed as output
 os.makedirs("/tmp/casmi", exist_ok=True)
 sys.path.insert(0, CODE)
+# Fingerprint term normalised by its spread within each pool, at the weight the v12
+# model gets from raw gamma 32 (RESULTS.md section 27). fpsearch reads both at import.
+os.environ["FP_NORM"] = "std"
+os.environ["GAMMA"] = "2.62"
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -119,7 +123,7 @@ analog.build()
 step("fingerprints and exact masses built")
 
 fpsearch.submit("/kaggle/working/submission.csv")
-step(f"submission written (gamma={fpsearch.GAMMA:g})")
+step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")
