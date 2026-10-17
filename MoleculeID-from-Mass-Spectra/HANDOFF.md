@@ -1,6 +1,6 @@
 # Handoff — CASMI 2026 (as of 2026-10-17)
 
-Read RESULTS.md §11–24 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–25 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
@@ -41,6 +41,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - Ranking loss tau 0.1: worse in every column (§23).
 - Ranking loss tau 0.025 / 0.0125 / 0.00625, lambda 3, 4 epochs: worse than tau 0.05 at gamma 32; lr 1e-4 worse at
   any gamma (§24).
+- Ranking loss on the molecule-averaged prediction (`FP_MOL=4`, lambda 1 or 4): val mol-MRR below the per-spectrum
+  loss; its +0.018 class 3 on 200 molecules disagrees with it (§25).
 
 ## What the eval can and cannot tell you (§15–16, §17, §21)
 
@@ -65,6 +67,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |
 | `fpmodel_c1cov3_{mac,t025,t0125,t00625,t025_l3,best4,lr4}.pt` | `splits_c1cov3.npz` rows | §24 sweep, Mac only; `mac` = §21 rerun |
+| `fpmodel_c1cov3_{mol4,mol4_l4}.pt` | `splits_c1cov3.npz` rows | §25, molecule-averaged ranking loss (not better) |
 | `fpmodel_c1env.pt` | `splits_c1env.npz` rows | §16; not used since §17 |
 
 A model is only valid on the split whose rows it excluded. `fpmodel.pt` saw 90% of `splits_cov3.npz` queries and
@@ -83,9 +86,13 @@ SPLITS=data/splits_c1cov3.npz FP_INIT=data/fpmodel_c1cov3.pt FP_MODEL=data/fpmod
   ../guard.sh python3 fingerprint.py --train --holdout --epochs=2
 ```
 Knobs: `FP_RANK` (lambda), `FP_TAU`, `FP_RANK_K` (candidates per spectrum, 64), `FP_LR` (1e-3), `FP_COSINE`,
+`FP_MOL` (rank molecule-averaged groups, §25; 0), `FP_CKPT_MIN` (resumable checkpoint interval, 5; 0 = off),
 `FP_INIT` (asserts same bits/width/defect, so same split), `--epochs`, `--limit`. The log prints `epoch 0 pool-MRR`
-for a fine-tune: it must read **0.5313** for `fpmodel_c1cov3.pt` (0.5073 for `fpmodel.pt` on `splits.npz`).
-A checkpoint is saved every epoch (weights only: no optimizer state, no epoch counter).
+for a fine-tune: it must read **0.5313** for `fpmodel_c1cov3.pt` (0.5073 for `fpmodel.pt` on `splits.npz`), then
+`mol-MRR` (mean over up to 4 spectra per structure, as the eval queries; 0.6025 for `fpmodel_c1cov3.pt`).
+Weights are saved every epoch. **A killed run resumes**: rerun the same command and it continues from
+`FP_MODEL.state` (at most `FP_CKPT_MIN` lost; bit-identical to an uninterrupted run). The state file is removed at
+the end; a stale one from a different run trips an assert, delete it to start over.
 
 ## Eval cheat-sheet
 
@@ -117,6 +124,13 @@ SPLITS=data/splits_c1cov3.npz FP_MODEL=data/fpmodel_c1cov3_<name>.pt FRACS=1 GAM
 Local `test.parquet` is a placeholder copied from train: use it only to check `submit()` runs.
 
 ## Machine notes
+
+Mac (Apple M4, 16 GB; the training machine since 2026-10-17):
+- Venv at the repo root: `../.venv/bin/python` (Python 3.12, numpy 2.5, rdkit 2026.3.3, torch 2.14). CPU only.
+- Ranking-loss epoch 12.5 min (6.5 with `FP_MOL`); `dilute.py` FRACS=1 ~25 s.
+- The battery reads 0% on AC, so a power cut restarts it (`autorestart` is on). Keep job scripts in `data/jobs/`,
+  not `/tmp` (wiped on reboot), and run everything under `caffeinate -ims`: without it the Mac idle-sleeps
+  mid-run (17 min lost on 2026-10-17).
 
 Linux laptop (15.6 GB, swap nearly full):
 - One heavy job at a time, always under `../guard.sh` with `MIN_AVAIL_MB=2500`; **never weaken the guard** after a

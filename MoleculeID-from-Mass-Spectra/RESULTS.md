@@ -828,3 +828,34 @@ v12 at 128 reproduces §22. No row passes the rule against v12 as shipped: at 12
 `C2_BANNED=1` LB is +0.003 (16 class 3 molecules, noise) while class 1 falls 0.012; at 32
 and 64 it is lower. The plain LB's +0.017 at 128 is index-reachable class 2 (§16). Not
 submitted; v12 stays.
+
+## 25. Ranking molecules instead of spectra does not help
+
+Inference scores the mean prediction over a molecule's spectra (`fpsearch.query_fp`), and a
+held-out query is up to 4 spectra of one structure, but the ranking loss ranked each spectrum
+alone. `FP_MOL=4` splits each structure's training spectra into random groups of up to 4
+(every spectrum still once per epoch), keeps BCE per spectrum, and applies the ranking loss to
+each group's mean sigmoid. A new val metric, `mol-MRR`, is pool-MRR on the mean over up to 4
+spectra of 2,000 val structures, the way the eval queries. The init model already gains +0.07
+from averaging (0.5313 -> 0.6025). Section 21's knobs otherwise; gamma 32, no gate:
+
+| model | val pool-MRR | val mol-MRR | class 1 | class 3 | `C2_BANNED=1` LB |
+|---|---|---|---|---|---|
+| Mac baseline (per spectrum) | **0.6294** | **0.7153** | **0.9178** | 0.4066 | 0.4322 |
+| `FP_MOL=4` | 0.6172 | 0.7036 | 0.9159 | **0.4243** | **0.4446** |
+| `FP_MOL=4 FP_RANK=4` | 0.6081 | 0.7006 | 0.9104 | 0.4139 | 0.4365 |
+| tau 0.0125 (§24, reference) | 0.6833 | 0.7544 | 0.9114 | 0.3894 | 0.4180 |
+
+`FP_MOL=4` passes the gate on the 200-molecule eval (+0.018 class 3), but its own target
+metric, mol-MRR on 2,000 molecules, falls 0.012, so the second look points the other way and
+it is not a winner. Restoring the ranking gradient (lambda 4, since a batch holds 64 molecule
+terms instead of 256 spectrum terms) does not lift it. Ranking every spectrum alone raises the
+averaged prediction more than ranking the average does: each spectrum must place the answer
+first on its own, and a batch draws four times as many pools. One upside: val tanimoto stays
+calibrated (0.326), unlike a sharper tau. An epoch takes half the time (6.5 min), which locates
+the training cost: `Pools.batch`, a Python loop per row, not the network.
+
+`fingerprint.py` also checkpoints a resumable state every `FP_CKPT_MIN` minutes (default 5) to
+`FP_MODEL + ".state"` (model, optimizer, schedule, rng, the epoch's order and position; written
+via fsync + rename). Rerunning the same command resumes from it. A run killed with `kill -9`
+mid-epoch and resumed ends with weights bit-identical to an uninterrupted run.

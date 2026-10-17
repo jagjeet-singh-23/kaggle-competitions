@@ -83,6 +83,7 @@ If nothing beats the baseline, keep v12 and stop.
 
 Possible bigger step, needs code: inference averages the predicted fingerprint over a molecule's spectra
 (`fpsearch.query_fp`), training ranks each spectrum alone. Rank on the molecule-averaged prediction instead.
+**Done 2026-10-17 (`FP_MOL`, RESULTS.md §25): not better. The sweep itself is §24: v12 stays.**
 
 ## 3. Ship a winner (only if one passes)
 

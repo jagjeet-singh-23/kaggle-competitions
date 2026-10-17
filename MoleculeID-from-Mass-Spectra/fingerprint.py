@@ -46,6 +46,16 @@ RANK = float(os.environ.get("FP_RANK", 0))
 TAU = float(os.environ.get("FP_TAU", 0.05))
 RANK_K = int(os.environ.get("FP_RANK_K", 64))   # candidates per spectrum in training; the median pool is ~50
 LR = float(os.environ.get("FP_LR", 1e-3))        # a fine-tune from FP_INIT may want a smaller one
+# FP_MOL=k ranks molecules, not spectra: inference scores the mean prediction over a
+# molecule's spectra (fpsearch.query_fp) and a held-out query is up to 4 spectra of one
+# structure (split.py MAX_SPECTRA), so the ranking loss sees groups of up to k spectra
+# of one structure, averaged. BCE stays per spectrum. 0 ranks each spectrum alone.
+MOL = int(os.environ.get("FP_MOL", 0))
+# FP_CKPT_MIN: minutes between resumable checkpoints (model, optimizer, schedule, rng,
+# the epoch's order and position) in FP_MODEL + ".state". Rerunning the same command
+# resumes from it; it is removed when the run finishes. 0 turns it off.
+CKPT_MIN = float(os.environ.get("FP_CKPT_MIN", 5))
+STATE = MODEL + ".state"
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
 HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
@@ -183,9 +193,29 @@ def pool_scores(p, C, mask):
     return s.masked_fill(~mask, float("-inf"))
 
 
-def rank_loss(logits, C, mask):
-    s = pool_scores(torch.sigmoid(logits), C, mask)
+def rank_loss(p, C, mask):
+    """p: predicted probabilities, one row per spectrum or per molecule."""
+    s = pool_scores(p, C, mask)
     return nn.functional.cross_entropy(s / TAU, torch.zeros(len(s), dtype=torch.long))
+
+
+def mol_groups(rows, idx, k, rng):
+    """idx split into groups of at most k spectra sharing a structure: a random
+    partition of each structure's spectra, so an epoch still sees every spectrum once."""
+    idx = rng.permutation(idx)
+    idx = idx[np.argsort(rows[idx], kind="stable")]
+    groups = []
+    for g in np.split(idx, np.flatnonzero(np.diff(rows[idx])) + 1):
+        groups.extend(np.split(g, range(k, len(g), k)))
+    rng.shuffle(groups)
+    return groups
+
+
+def mean_by_group(p, sizes):
+    """Mean of consecutive rows of p, `sizes` rows per group."""
+    seg = torch.repeat_interleave(torch.arange(len(sizes)), torch.as_tensor(sizes))
+    out = torch.zeros(len(sizes), p.shape[1], dtype=p.dtype).index_add_(0, seg, p)
+    return out / torch.as_tensor(sizes, dtype=p.dtype).unsqueeze(1)
 
 
 def pool_mrr(model, mz, it, pm, rows, bits, idx, pools, n=2000, chunk=128):
@@ -197,6 +227,29 @@ def pool_mrr(model, mz, it, pm, rows, bits, idx, pools, n=2000, chunk=128):
     rr = []
     for i in range(0, len(idx), chunk):
         C, M = pools.batch(rows[idx[i:i + chunk]], bits, rng, k=256)
+        s = pool_scores(P[i:i + chunk], C, M)
+        rr.append(1.0 / (1 + (s[:, 1:] > s[:, :1]).sum(1)).float())
+    return float(torch.cat(rr).mean())
+
+
+def mol_mrr(model, mz, it, pm, rows, bits, idx, pools, n=2000, k=4, chunk=128):
+    """pool_mrr for molecules as inference queries them: up to k spectra of one
+    held-out structure, predictions averaged (fpsearch.query_fp)."""
+    rng = np.random.default_rng(1)
+    first, seen = [], set()
+    for g in mol_groups(rows, idx, k, rng):
+        if rows[g[0]] not in seen:
+            seen.add(rows[g[0]])
+            first.append(g)
+        if len(first) == n:
+            break
+    flat = np.concatenate(first)
+    P = mean_by_group(torch.tensor(predict(model, mz[flat], it[flat], pm[flat])),
+                      [len(g) for g in first])
+    srows = rows[[g[0] for g in first]]
+    rr = []
+    for i in range(0, len(first), chunk):
+        C, M = pools.batch(srows[i:i + chunk], bits, rng, k=256)
         s = pool_scores(P[i:i + chunk], C, M)
         rr.append(1.0 / (1 + (s[:, 1:] > s[:, :1]).sum(1)).float())
     return float(torch.cat(rr).mean())
@@ -243,59 +296,135 @@ def train(epochs=6, batch=256, lr=LR, limit=None, quiet=False, drop=None):
             "FP_INIT was trained on a different drop set or shape"
         model.load_state_dict(ck["state"])
         print(f"continuing from {INIT}", flush=True)
+    resume = None
+    if CKPT_MIN and os.path.exists(STATE):
+        resume = torch.load(STATE, weights_only=False)
+        assert (np.array_equal(resume["bits"], bits) and resume["epochs"] == epochs
+                and resume["mol"] == MOL), f"{STATE} is from a different run; delete it to start over"
     pools = None
     if RANK:
         pools = Pools()
         assert (pools.arow[np.unique(rows)] >= 0).all(), "a training structure is not a candidate"
-        if INIT and not quiet:
-            print(f"  epoch 0  pool-MRR {pool_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}",
-                  flush=True)
+        if INIT and not quiet and not resume:
+            print(f"  epoch 0  pool-MRR {pool_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}  "
+                  f"mol-MRR {mol_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-    steps = epochs * -(-len(tr) // batch)
+    gb = max(1, batch // MOL) if MOL else batch    # molecules per batch: ~`batch` spectra
+    if MOL:
+        n_groups = int((-(-np.unique(rows[tr], return_counts=True)[1] // MOL)).sum())
+        steps = epochs * -(-n_groups // gb)
+    else:
+        steps = epochs * -(-len(tr) // batch)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps) if COSINE else None
     lossf = nn.BCEWithLogitsLoss()
-    t0 = time.time()
-    for ep in range(epochs):
+
+    def plan():
+        """An epoch's spectra in training order, and group sizes when ranking molecules."""
+        if MOL:
+            groups = mol_groups(rows, tr, MOL, rng)
+            return np.concatenate(groups), np.array([len(g) for g in groups])
+        return rng.permutation(tr), None
+
+    def batches(flat, gsizes, start):
+        if gsizes is None:
+            for i in range(start, -(-len(flat) // batch)):
+                yield i, flat[i * batch:(i + 1) * batch], None
+        else:
+            offs = np.concatenate([[0], np.cumsum(gsizes)])
+            for i in range(start, -(-len(gsizes) // gb)):
+                s = gsizes[i * gb:(i + 1) * gb]
+                yield i, flat[offs[i * gb]:offs[i * gb + len(s)]], s.tolist()
+
+    def checkpoint(ep, i, flat, gsizes, tot):
+        save_atomic({"state": model.state_dict(), "opt": opt.state_dict(),
+                     "sched": sched.state_dict() if sched else None,
+                     "rng": rng.bit_generator.state, "torch_rng": torch.get_rng_state(),
+                     "epoch": ep, "batch": i, "flat": flat, "gsizes": gsizes, "tot": tot,
+                     "elapsed": time.time() - t0, "bits": bits, "epochs": epochs, "mol": MOL},
+                    STATE)
+
+    start_ep, start_i, elapsed = 0, 0, 0.0
+    if resume:
+        model.load_state_dict(resume["state"])
+        opt.load_state_dict(resume["opt"])
+        if sched:
+            sched.load_state_dict(resume["sched"])
+        rng.bit_generator.state = resume["rng"]
+        torch.set_rng_state(resume["torch_rng"])
+        start_ep, start_i, elapsed = resume["epoch"], resume["batch"], resume["elapsed"]
+        print(f"resuming from {STATE}: epoch {start_ep + 1}/{epochs}, batch {start_i}", flush=True)
+
+    t0 = time.time() - elapsed
+    last = time.time()
+    for ep in range(start_ep, epochs):
         model.train()
-        order = rng.permutation(tr)
-        tot = 0.0
-        for i in range(0, len(order), batch):
-            b = order[i:i + batch]
+        if resume and ep == start_ep and resume["flat"] is not None:
+            flat, gsizes, tot, first = resume["flat"], resume["gsizes"], resume["tot"], start_i
+        else:
+            (flat, gsizes), tot, first = plan(), 0.0, 0
+        for i, b, sizes in batches(flat, gsizes, first):
             X = torch.tensor(featurise(mz[b], it[b], pm[b]))
             Y = torch.tensor(unpack(fp, rows[b], bits))
             opt.zero_grad()
             out = model(X)
             l = lossf(out, Y)
             if pools:
-                l = l + RANK * rank_loss(out, *pools.batch(rows[b], bits, rng))
+                p = torch.sigmoid(out)
+                r = rows[b]
+                if sizes:
+                    p = mean_by_group(p, sizes)
+                    r = r[np.cumsum([0] + sizes[:-1])]
+                l = l + RANK * rank_loss(p, *pools.batch(r, bits, rng))
             l.backward()
             opt.step()
             if sched:
                 sched.step()
             tot += l.item() * len(b)
+            # A resumable checkpoint every CKPT_MIN minutes: power cuts restart the
+            # Mac, and the per-epoch weights below cannot resume a run.
+            if CKPT_MIN and time.time() - last > CKPT_MIN * 60:
+                checkpoint(ep, i + 1, flat, gsizes, tot)
+                last = time.time()
         # Checkpoint every epoch. A six-epoch run is two and a half hours and the
         # memory guard killed one at epoch five, losing all of it because the only
         # save was after the loop. One epoch is the most a kill should ever cost.
         save(model, bits)
         if not quiet:
-            print(f"  epoch {ep + 1}/{epochs}  loss {tot / len(order):.4f}  "
+            print(f"  epoch {ep + 1}/{epochs}  loss {tot / len(tr):.4f}  "
                   f"tanimoto {'/'.join(f'{x:.4f}' for x in evaluate(model, mz, it, pm, rows, fp, bits, va))}"
                   f" (model/shuffled/mean-fp)  "
                   + (f"pool-MRR {pool_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}  "
+                     f"mol-MRR {mol_mrr(model, mz, it, pm, rows, bits, va, pools):.4f}  "
                      if pools else "")
                   + f"{(time.time() - t0) / 60:.1f} min  "
                   f"[saved]", flush=True)
+        if CKPT_MIN:
+            checkpoint(ep + 1, 0, None, None, 0.0)   # next epoch draws its order from rng
+            last = time.time()
+    if os.path.exists(STATE):
+        os.remove(STATE)
     if not quiet:
         print(f"wrote {MODEL}")
     return model, bits
+
+
+def save_atomic(obj, path):
+    """Write, fsync, then rename: a power cut leaves the old file or the new one,
+    never half of one."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        torch.save(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def save(model, bits):
     """The architecture travels with the weights. Without it, a checkpoint trained
     with different features or width cannot be reloaded -- load_model would build the
     default shape and fail on the state dict."""
-    torch.save({"state": model.state_dict(), "bits": bits,
-                "defect": DEFECT, "hidden": HIDDEN, "bin": BIN}, MODEL)
+    save_atomic({"state": model.state_dict(), "bits": bits,
+                 "defect": DEFECT, "hidden": HIDDEN, "bin": BIN}, MODEL)
 
 
 def predict(model, mz, it, pm, batch=512):
@@ -393,9 +522,19 @@ def selftest():
     # matches the decoy. Column 2 pads with a copy of the answer and must not count.
     C = torch.tensor([[[1, 1, 0, 0], [0, 0, 1, 1], [1, 1, 0, 0]]], dtype=torch.float32)
     M = torch.tensor([[True, True, False]])
-    good, bad = torch.tensor([[9., 9, -9, -9]]), torch.tensor([[-9., -9, 9, 9]])
+    good = torch.sigmoid(torch.tensor([[9., 9, -9, -9]]))
+    bad = torch.sigmoid(torch.tensor([[-9., -9, 9, 9]]))
     assert rank_loss(good, C, M) < 0.01 < 5 < rank_loss(bad, C, M)
-    assert pool_scores(torch.sigmoid(good), C, M)[0, 2] == float("-inf")
+    assert pool_scores(good, C, M)[0, 2] == float("-inf")
+
+    # Molecule groups: every spectrum exactly once, at most k per group, one structure
+    # per group; the group mean is the per-molecule prediction inference scores.
+    r = np.array([5, 5, 5, 5, 5, 7, 7, 9], np.int32)
+    G = mol_groups(r, np.arange(len(r)), 2, np.random.default_rng(0))
+    assert sorted(np.concatenate(G).tolist()) == list(range(len(r)))
+    assert all(1 <= len(g) <= 2 and len(set(r[g])) == 1 for g in G) and len(G) == 3 + 1 + 1
+    p = torch.tensor([[1., 0], [3, 2], [5, 4]])
+    assert torch.equal(mean_by_group(p, [2, 1]), torch.tensor([[2., 1], [5, 4]]))
     print("fingerprint self-checks passed")
 
 
