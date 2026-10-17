@@ -884,3 +884,45 @@ Rounding alone moves 200-molecule class 3 by 0.010-0.025 and its LB by 0.006-0.0
 evidence**; val pool-MRR / mol-MRR is. Sections 24-25 already decided on val MRR (tau 0.0125,
 `FP_MOL`); their eval differences at gamma 32 (-0.014, +0.012) are within this noise, so the
 "keep v12" decision rests on no eval gain being shown, not on a measured loss.
+
+## 27. Normalising the fingerprint term within the pool: sharp tau wins on the leak-free split
+
+Section 24's sharp-tau models lost at gamma 32 because their predicted tanimoto has 2.6x less
+spread within a pool (median std: tau 0.05 0.041, tau 0.0125 0.025, tau 0.00625 0.016), so the
+same gamma weighs them less. `FP_NORM` (`fpsearch.normalise`, used by `dilute.py` and
+`submit()`) rescales each molecule's pool tanimoto before gamma: `std` t / std(t), `z`
+(t - mean) / std, `rank` the percentile. Default "" is v12's raw score. `dilute.py` sweeps
+`GAMMAS` and `NORMS` in one run. Leak-free split, `C2_BANNED=1` LB (class 1 / class 3):
+
+| scoring | mac | mac_repro | t0125 | t00625 | best4 | mol4 |
+|---|---|---|---|---|---|---|
+| raw, gamma 32 (shipped) | 0.4322 (0.918/0.407) | 0.4385 | 0.4180 | 0.3948 | 0.4104 | 0.4446 |
+| std, gamma 1.31 | 0.4157 | 0.4230 | 0.4354 | 0.4350 | **0.4477** | 0.4295 |
+| **std, gamma 2.62** | 0.4300 (0.914/0.404) | 0.4430 (0.914/0.422) | 0.4498 | 0.4515 | **0.4681** (0.914/0.457) | 0.4452 |
+| std, gamma 5.24 | 0.4370 | 0.4498 | 0.4622 | 0.4631 | **0.4782** (0.925/0.468) | 0.4435 |
+
+`z` is 0.001-0.004 below `std` everywhere, `rank` 0.02-0.07 below. At std gamma 2.62 the baseline
+scores what raw 32 gives it (0.430 / 0.443 vs 0.432 / 0.439), so that is the shipped weight.
+There best4 beats the mean of the two baseline trainings by +0.032 LB and +0.044 class 3 with
+class 1 unchanged, 2-3x the gap between the two baseline trainings (0.013 / 0.018), and the
+order best4 > t0125 ~ t00625 > baseline ~ mol4 holds at every gamma and every norm. It is also
+val pool-MRR's order, so for the first time the eval and the val metric agree on tau.
+
+**On `splits.npz` it does not pass.** Ship fine-tunes of `fpmodel.pt` (tau 0.0125 2 epochs,
+`fpmodel_rank_t0125.pt`; tau 0.00625 4 epochs, `fpmodel_rank_best4.pt`, val pool-MRR 0.733 /
+mol-MRR 0.765 against v12's 0.651):
+
+| model | scoring | class 1 | `C2_BANNED=1` LB |
+|---|---|---|---|
+| v12 | raw 32 (shipped) | **0.9215** | 0.1709 |
+| v12 | std 2.62 | 0.8930 | 0.1710 |
+| tau 0.0125 | std 2.62 | 0.9142 | **0.1728** |
+| tau 0.00625, 4 ep | std 2.62 | 0.9075 | 0.1647 |
+
+Class 3 here is 16 covered molecules, so the comparison is class 1, and the std norm costs
+every model class 1 on this split (v12 -0.029), where it costs none on the leak-free split.
+The two splits' class 1 differ: public-library spectra here, Enveda spectra there (§15-16,
+the hidden test is likely Enveda). Under the rule neither model passes (class 1 falls; best4's
+LB too); tau 0.0125 at std 2.62 is closest (+0.002 LB, class 1 -0.007, the size of retraining
+noise). Only the leaderboard can settle it. `submit()` runs locally with
+`FP_MODEL=data/fpmodel_rank_t0125.pt FP_NORM=std GAMMA=2.62`.

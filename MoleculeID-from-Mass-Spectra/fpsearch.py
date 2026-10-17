@@ -34,6 +34,27 @@ DATA, WORK = library.DATA, library.WORK
 TOP_K = 25
 GAMMA = float(os.environ.get("GAMMA", 32.0))   # see submit(): chosen on the solved class mix
 GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", "0,4,8,16,32,64").split(","))
+# FP_NORM normalises the predicted-fingerprint tanimoto within each molecule's pool
+# before GAMMA weighs it, so the weight does not depend on the model's tanimoto scale
+# (a sharper ranking-loss tau shrinks it 2.6x, RESULTS.md sections 24 and 27): "std"
+# t / std(t), "z" (t - mean) / std, "rank" the percentile in the pool; "" leaves t raw
+# (v12). A std-normalised gamma of 2.62 weighs the v12-style model as raw 32 does.
+FP_NORM = os.environ.get("FP_NORM", "")
+
+
+def normalise(t, how=FP_NORM):
+    if not how:
+        return t
+    if how == "rank":
+        r = np.argsort(np.argsort(t, kind="stable"), kind="stable")
+        return r / max(len(t) - 1, 1)
+    sd = t.std()
+    if len(t) < 2 or sd < 1e-9:
+        return np.zeros_like(t)
+    if how == "std":
+        return t / sd
+    assert how == "z", f"FP_NORM={how!r}"
+    return (t - t.mean()) / sd
 
 
 def load_model():
@@ -196,7 +217,7 @@ def submit(path=None, gamma=GAMMA):
             fpq = query_fp(model, spectra)
             B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
             inter = B @ fpq
-            t = inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9)
+            t = normalise(inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9))
             for r, v in zip(pool, t):
                 k = an.key[r]
                 total[k] = total.get(k, 0.0) + gamma * float(v)

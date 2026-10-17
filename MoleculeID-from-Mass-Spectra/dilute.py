@@ -28,7 +28,7 @@ import library
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
 import formula
-from fpsearch import load_model, query_fp, TOP_K
+from fpsearch import FP_NORM, load_model, normalise, query_fp, TOP_K
 from metric import mrr
 from search import Searcher, spectra_of
 
@@ -81,6 +81,11 @@ DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
 # held-out class 2 gain from a higher gamma, absent on the leaderboard, needs the
 # answer to sit in the index's own structures.
 C2_BANNED = os.environ.get("C2_BANNED") == "1"
+# FP_NORM (fpsearch.normalise): "std", "z", "rank" or "" (raw), as submit() scores.
+# GAMMAS / NORMS sweep several in one run (comma lists; "raw" or "" for no norm).
+GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", str(GAMMA)).split(","))
+NORMS = tuple("" if x == "raw" else x for x in os.environ.get("NORMS", FP_NORM or "raw").split(","))
+
 
 
 @functools.lru_cache(maxsize=None)
@@ -139,8 +144,8 @@ def fits(an, key_, pm, add):
     return any(abs(m - (pm - ADDUCTS[a][0])) <= m * SPEC_PPM * 1e-6 for a in add)
 
 
-def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0):
-    preds, sizes, kept = {1: {}, 2: {}, 3: {}}, [], []
+def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, norm=FP_NORM):
+    preds, sizes, kept, spread = {1: {}, 2: {}, 3: {}}, [], [], []
     for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
         if SPEC_MASS != "0":
             fit = {q: v for q, v in spec.items() if fits(an, q, pm, add)}
@@ -162,6 +167,9 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0):
             B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
             inter = B @ fpq
             t = inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9)
+            if len(t) > 1:
+                spread.append(t.std())
+            t = normalise(t, norm)
             for r, v in zip(pool, t):
                 key_ = an.key[r]
                 total[key_] = total.get(key_, 0.0) + g * float(v)
@@ -180,6 +188,8 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0):
         preds[cls][k] = top[:TOP_K]
     if kept:
         print(f"  oracle keeps a median {np.median(kept):.1%} of candidates", flush=True)
+    if spread and os.environ.get("SHOW_SPREAD") == "1":
+        print(f"  pool tanimoto std: median {np.median(spread):.4f}", flush=True)
     return [mrr(preds[c], answers[c]) for c in (1, 2, 3)], int(np.median(sizes))
 
 
@@ -201,11 +211,14 @@ def main():
             os.environ["EXT_FRAC"] = str(f)
             an = Analog(banned=banned, external=f > 0)
         cov = coverage(an, jobs)
-        for d, gt in [(d, gt) for d in DELTAS for gt in GATES]:
-            v, med = score(an, bits, jobs, answers,
-                           ppm=f if MODE == "ppm" else None, delta=d, gate=gt)
+        for d, gt, g, nm in [(d, gt, g, nm) for d in DELTAS for gt in GATES
+                             for nm in NORMS for g in GAMMAS]:
+            v, med = score(an, bits, jobs, answers, gamma=g,
+                           ppm=f if MODE == "ppm" else None, delta=d, gate=gt, norm=nm)
             if len(GATES) > 1:
                 print(f"  gate {gt:g}", end="")
+            if len(GAMMAS) > 1 or len(NORMS) > 1:
+                print(f"  norm {nm or 'raw':4s} gamma {g:<6g}", end="")
             # MRR among molecules that are actually in the pool. If the extrapolation
             # in section 8 is sound this is flat across fractions; if it rises with f
             # the model is wrong and coverage buys less than the projection claims.
