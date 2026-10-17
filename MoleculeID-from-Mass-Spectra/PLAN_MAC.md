@@ -22,6 +22,17 @@ Not needed: `train.parquet` (only `library.build` reads it), `ext_chembl/`, `ext
 Do not copy `pool/`: its cache signature contains absolute shard paths, so on the Mac it is stale and the first run
 rebuilds it from `ext/` (minutes, then cached).
 
+**Done on 2026-10-17: all of the above is on a pen drive (FAT32, label `CASMI`, folder `casmi-data/`, 38 files, 2.0 GB,
+checksums in `SHA256SUMS`, steps in its `README.txt`).** On the Mac:
+
+```bash
+mkdir -p data
+rsync -rtP /Volumes/CASMI/casmi-data/ data/ --exclude README.txt --exclude SHA256SUMS
+(cd data && shasum -a 256 -c /Volumes/CASMI/casmi-data/SHA256SUMS)    # every line must say OK
+```
+
+Without the drive, over the network (needs SSH on the Linux box, which is off by default):
+
 ```bash
 rsync -avP <linux-host>:Coding/Personal/ML/MoleculeID-from-Mass-Spectra/data/{index,ext} data/
 rsync -avP <linux-host>:Coding/Personal/ML/MoleculeID-from-Mass-Spectra/data/{structures.npz,key14.npz,splits.npz,splits_c1cov3.npz,fpmodel.pt,fpmodel_c1cov3.pt,fpmodel_c1cov3_rank.pt} data/
