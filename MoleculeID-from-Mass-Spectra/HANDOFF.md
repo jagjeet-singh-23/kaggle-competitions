@@ -125,10 +125,10 @@ Local `test.parquet` is a placeholder copied from train: use it only to check `s
 
 ## Machine notes
 
-Mac (Apple M4, 16 GB; the training machine since 2026-10-17):
+Mac mini (Apple M4, 16 GB; the training machine since 2026-10-17):
 - Venv at the repo root: `../.venv/bin/python` (Python 3.12, numpy 2.5, rdkit 2026.3.3, torch 2.14). CPU only.
 - Ranking-loss epoch 12.5 min (6.5 with `FP_MOL`); `dilute.py` FRACS=1 ~25 s.
-- The battery reads 0% on AC, so a power cut restarts it (`autorestart` is on). Keep job scripts in `data/jobs/`,
+- No battery, so a power cut restarts it (`autorestart` is on; no UPS). Keep job scripts in `data/jobs/`,
   not `/tmp` (wiped on reboot), and run everything under `caffeinate -ims`: without it the Mac idle-sleeps
   mid-run (17 min lost on 2026-10-17).
 
