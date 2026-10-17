@@ -1,6 +1,6 @@
 # Handoff — CASMI 2026 (as of 2026-10-17)
 
-Read RESULTS.md §11–26 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–27 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
@@ -10,12 +10,17 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   molecule (§14), with a fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**
   (§21–22). The loss is what moved it: +0.016 over v9/v11 (0.236).
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v12**. `kernel/code/` (git-ignored) holds
-  the shipped files and equals the repo's `fingerprint.py` / `fpsearch.py` at the time of v12 (no gate, gamma 32);
-  `kernel/code/fpmodel.pt` = `data/fpmodel_rank.pt`.
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v13 (0.245, worse than v12)**.
+  `kernel/code/` (git-ignored) holds v13: the repo's `fingerprint.py` / `fpsearch.py` as of 9bc48ef and
+  `fpmodel.pt` = `data/fpmodel_rank_t0125.pt`; `kernel/casmi_submit.py` sets `FP_NORM=std GAMMA=2.62`.
+  To resubmit v12: drop those two env lines and ship `data/fpmodel_rank.pt` (v12 = raw gamma 32, no norm).
+  **Select v12 for the final ranking.**
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
   so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
-  `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at every gamma; not submitted.
+  `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at raw gamma.
+- Pool-normalised fingerprint term (`FP_NORM=std`, §27): sharp tau wins clearly on the leak-free split, but v13
+  (tau 0.0125, std gamma 2.62) scored **0.245 vs 0.252**. The leak-free split's class 3 gain did not transfer;
+  `splits.npz` class 1 falling (-0.007) was the honest signal.
 - **Before 2026-10-17 every `dilute.py` number without an explicit `GATES` was gamma 128, not the `GAMMA` given**
   (§17–23; default gate bug, fixed). Re-measure before comparing against an old number.
 
@@ -27,6 +32,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v10 | gamma 64 | 0.235 |
 | v11 | gated gamma (0.7 / 128) | 0.236 |
 | v12 | fpmodel + in-pool ranking loss (§21–22), gamma 32, no gate | **0.252** |
+| v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
 
 ## What has been tried and closed
 
@@ -63,7 +69,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 |---|---|---|
 | `fpmodel.pt` | `splits.npz` rows | v9–v11 shipped model; init for the shipped fine-tune |
 | `fpmodel_rank.pt` | `splits.npz` rows | **v12 shipped** (fpmodel.pt + ranking loss 2 ep) |
-| `fpmodel_rank_t0125.pt` | `splits.npz` rows | §24, tau 0.0125 fine-tune of fpmodel.pt; gated out |
+| `fpmodel_rank_t0125.pt` | `splits.npz` rows | §24, tau 0.0125 fine-tune of fpmodel.pt; v13 shipped (0.245) |
+| `fpmodel_rank_best4.pt` | `splits.npz` rows | §27, tau 0.00625 4 ep fine-tune of fpmodel.pt; not shipped |
 | `fpmodel_c1cov3.pt` | `splits_c1cov3.npz` rows | leak-free BCE baseline; **init for every tuning run** |
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |

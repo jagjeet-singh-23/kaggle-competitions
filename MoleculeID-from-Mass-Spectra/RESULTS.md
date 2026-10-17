@@ -926,3 +926,12 @@ the hidden test is likely Enveda). Under the rule neither model passes (class 1 
 LB too); tau 0.0125 at std 2.62 is closest (+0.002 LB, class 1 -0.007, the size of retraining
 noise). Only the leaderboard can settle it. `submit()` runs locally with
 `FP_MODEL=data/fpmodel_rank_t0125.pt FP_NORM=std GAMMA=2.62`.
+
+**Leaderboard: v13 (tau 0.0125 at std gamma 2.62) scored 0.245, against v12's 0.252.** The
+leak-free split predicted a gain (+0.015 `C2_BANNED=1` LB over the mean baseline, +0.03 class 3)
+and `splits.npz` predicted +0.002 with class 1 -0.007; the real -0.007 sits inside the
+retraining noise of §26 but on the losing side, so the class 3 gain the leak-free split shows for
+sharp tau plus normalisation does not reach the hidden test. `splits.npz` class 1 falling was the
+warning that pointed the right way. v12 stays best and is the one to select for the final
+ranking. The repo's `kernel/casmi_submit.py` and `kernel/code/` are v13; resubmitting v12 means
+removing the two `os.environ` lines and shipping `data/fpmodel_rank.pt` again.
