@@ -733,3 +733,19 @@ The per-class estimate made before submitting was +0.006 to +0.011 (class 1 from
 Enveda split, class 3 scaled by 12-15% coverage, class 2 only through COCONUT); the
 actual +0.016 is above it, so at least one of those three was too conservative. The
 `C2_BANNED=1` delta (+0.021) was the closer predictor this time.
+
+## 23. Softer ranking loss (tau 0.1) is worse; the rest of the sweep is open
+
+Section 21's setup with `FP_TAU=0.1` (2 epochs, cosine, same init, same split, gamma 32):
+
+| tau | val pool-MRR (ep 1 / ep 2) | class 1 | class 2 | class 3 quality | `C2_BANNED=1` LB |
+|---|---|---|---|---|---|
+| 0.05 (section 21) | 0.615 / 0.630 | 0.8869 | 0.6530 | 0.4486 | 0.4583 |
+| 0.1 | 0.595 / 0.601 | 0.8630 | 0.6093 | 0.4352 | 0.4456 |
+
+Every column falls, class 1 by 0.024, so it fails the submission rule. A softer softmax
+over the pool weakens the signal that pushes the answer above its isomers. Not run:
+tau 0.025, lambda 0.3 / 3, 4 epochs, lower lr, RANK_K (a first tau 0.025 run was killed
+by the memory guard before its first epoch; the machine was shared with Firefox and a
+1.7 GB server). `FP_LR` and `FP_RANK_K` are now env knobs (defaults 1e-3 / 64 unchanged).
+The plan for these runs is in PLAN_MAC.md.

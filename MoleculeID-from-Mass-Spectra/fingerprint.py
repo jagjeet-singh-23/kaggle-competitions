@@ -44,7 +44,8 @@ COSINE = os.environ.get("FP_COSINE") == "1"
 # so only a loss over the pool targets the ones that separate them (RESULTS.md 18-20).
 RANK = float(os.environ.get("FP_RANK", 0))
 TAU = float(os.environ.get("FP_TAU", 0.05))
-RANK_K = 64          # candidates per spectrum in training; the median pool is ~50
+RANK_K = int(os.environ.get("FP_RANK_K", 64))   # candidates per spectrum in training; the median pool is ~50
+LR = float(os.environ.get("FP_LR", 1e-3))        # a fine-tune from FP_INIT may want a smaller one
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
 HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
@@ -211,7 +212,7 @@ def choose_bits(fp, rows):
     return np.where((f > BIT_LO) & (f < BIT_HI))[0]
 
 
-def train(epochs=6, batch=256, lr=1e-3, limit=None, quiet=False, drop=None):
+def train(epochs=6, batch=256, lr=LR, limit=None, quiet=False, drop=None):
     """drop: index rows to exclude. For any measurement on data/splits.npz this MUST
     be splits['drop'], or the model trains on the very spectra it is scored against
     and the MRR is meaningless."""
