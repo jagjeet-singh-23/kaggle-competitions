@@ -14,7 +14,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   the shipped files and equals the repo's `fingerprint.py` / `fpsearch.py` at the time of v12 (no gate, gamma 32);
   `kernel/code/fpmodel.pt` = `data/fpmodel_rank.pt`.
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
-  so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16); untested on the LB.
+  so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
+  `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at every gamma; not submitted.
 - **Before 2026-10-17 every `dilute.py` number without an explicit `GATES` was gamma 128, not the `GAMMA` given**
   (§17–23; default gate bug, fixed). Re-measure before comparing against an old number.
 
@@ -59,6 +60,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 |---|---|---|
 | `fpmodel.pt` | `splits.npz` rows | v9–v11 shipped model; init for the shipped fine-tune |
 | `fpmodel_rank.pt` | `splits.npz` rows | **v12 shipped** (fpmodel.pt + ranking loss 2 ep) |
+| `fpmodel_rank_t0125.pt` | `splits.npz` rows | §24, tau 0.0125 fine-tune of fpmodel.pt; gated out |
 | `fpmodel_c1cov3.pt` | `splits_c1cov3.npz` rows | leak-free BCE baseline; **init for every tuning run** |
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |

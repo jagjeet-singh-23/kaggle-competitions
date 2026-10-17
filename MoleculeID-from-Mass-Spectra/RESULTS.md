@@ -810,3 +810,21 @@ Open: whether a sharper tau plus a matching gamma is real can only be shown on t
 leaderboard (a t0125 or best4 fine-tune on `splits.npz`, shipped at gamma 128). A score
 that does not depend on the tanimoto scale (rank or z-score within the pool) would
 let model and gamma be tuned apart.
+
+**The leaderboard candidate, built and gated out.** `fpmodel.pt` fine-tuned at tau 0.0125
+on `splits.npz` (`FP_TAU=0.0125`, 2 epochs, `data/fpmodel_rank_t0125.pt`): epoch 0
+pool-MRR 0.5073 (as Linux), then 0.714 / 0.719 against v12's 0.651. On `splits.npz`,
+`C2_BANNED=1`, no gate:
+
+| model | gamma | class 1 | class 3 (16 covered) | `C2_BANNED=1` LB | LB |
+|---|---|---|---|---|---|
+| v12 (`fpmodel_rank.pt`) | **32 (shipped)** | **0.9215** | 0.0504 | **0.1709** | 0.2393 |
+| v12 | 128 | 0.8621 | 0.0550 | 0.1664 | 0.2461 |
+| tau 0.0125 | 32 | 0.9311 | 0.0444 | 0.1674 | 0.2316 |
+| tau 0.0125 | 64 | 0.9226 | 0.0494 | 0.1700 | 0.2461 |
+| tau 0.0125 | 128 | 0.9099 | 0.0569 | 0.1740 | 0.2567 |
+
+v12 at 128 reproduces §22. No row passes the rule against v12 as shipped: at 128 the
+`C2_BANNED=1` LB is +0.003 (16 class 3 molecules, noise) while class 1 falls 0.012; at 32
+and 64 it is lower. The plain LB's +0.017 at 128 is index-reachable class 2 (§16). Not
+submitted; v12 stays.
