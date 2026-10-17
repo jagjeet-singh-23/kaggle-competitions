@@ -1,6 +1,6 @@
 # Handoff — CASMI 2026 (as of 2026-10-17)
 
-Read RESULTS.md §11–23 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–24 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
@@ -13,7 +13,10 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v12**. `kernel/code/` (git-ignored) holds
   the shipped files and equals the repo's `fingerprint.py` / `fpsearch.py` at the time of v12 (no gate, gamma 32);
   `kernel/code/fpmodel.pt` = `data/fpmodel_rank.pt`.
-- Ranking loss is untuned: lambda 1, tau 0.05, 2 epochs, lr 1e-3, RANK_K 64. Val pool-MRR was still rising at epoch 2.
+- Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
+  so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16); untested on the LB.
+- **Before 2026-10-17 every `dilute.py` number without an explicit `GATES` was gamma 128, not the `GAMMA` given**
+  (§17–23; default gate bug, fixed). Re-measure before comparing against an old number.
 
 | ver | change | LB |
 |---|---|---|
@@ -35,6 +38,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - Inference-side bit weighting, global or pool-local: no gain (§19).
 - Fingerprint ceiling: 0.948 within the pool, so the gap is prediction, not bit collisions (§20).
 - Ranking loss tau 0.1: worse in every column (§23).
+- Ranking loss tau 0.025 / 0.0125 / 0.00625, lambda 3, 4 epochs: worse than tau 0.05 at gamma 32; lr 1e-4 worse at
+  any gamma (§24).
 
 ## What the eval can and cannot tell you (§15–16, §17, §21)
 
@@ -57,6 +62,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | `fpmodel_c1cov3.pt` | `splits_c1cov3.npz` rows | leak-free BCE baseline; **init for every tuning run** |
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |
+| `fpmodel_c1cov3_{mac,t025,t0125,t00625,t025_l3,best4,lr4}.pt` | `splits_c1cov3.npz` rows | §24 sweep, Mac only; `mac` = §21 rerun |
 | `fpmodel_c1env.pt` | `splits_c1env.npz` rows | §16; not used since §17 |
 
 A model is only valid on the split whose rows it excluded. `fpmodel.pt` saw 90% of `splits_cov3.npz` queries and
@@ -69,7 +75,7 @@ A model is only valid on the split whose rows it excluded. `fpmodel.pt` saw 90% 
 SPLITS=data/<split>.npz FP_MODEL=data/fpmodel_<name>.pt FP_HIDDEN=2048 FP_DEFECT=1 \
   MIN_AVAIL_MB=2500 ../guard.sh python3 fingerprint.py --train --holdout
 
-# ranking-loss fine-tune (~50-60 min/epoch on the Linux box)
+# ranking-loss fine-tune (~50-60 min/epoch on the Linux box, ~12.5 on the M4 Mac)
 SPLITS=data/splits_c1cov3.npz FP_INIT=data/fpmodel_c1cov3.pt FP_MODEL=data/fpmodel_c1cov3_<name>.pt \
   FP_RANK=1 FP_TAU=0.05 FP_COSINE=1 FP_HIDDEN=2048 FP_DEFECT=1 MIN_AVAIL_MB=2500 \
   ../guard.sh python3 fingerprint.py --train --holdout --epochs=2
@@ -87,7 +93,8 @@ Splits (`split.py`, env `SPLIT_OUT`):
 - `data/splits_c1env.npz` — `C1_LIB=enveda-180`, class 1 from Enveda spectra (hidden test is Enveda data).
 - `data/splits_c1cov3.npz` — both of the above. **The one to use.**
 
-`dilute.py` env knobs: `SPLITS`, `FP_MODEL`, `FRACS=1` (full COCONUT), `GAMMA`, `GATES`+`GAMMA_HI`, `DELTAS`,
+`dilute.py` env knobs: `SPLITS`, `FP_MODEL`, `FRACS=1` (full COCONUT), `GAMMA`, `GATES`+`GAMMA_HI` (default gate 0 =
+no gate; it was 2 = always `GAMMA_HI` until 2026-10-17), `DELTAS`,
 `FORMULA_ORACLE=1`, `TRUE_ADDUCT` (default 1), `SPEC_MASS`, `C2_BANNED=1`. Search: `SIM=cos|rev|hyb`.
 
 Standard eval (FRACS=1: 1–2 min, 5–6 GB peak; always run with and without `C2_BANNED=1`):

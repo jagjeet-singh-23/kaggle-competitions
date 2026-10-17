@@ -71,7 +71,10 @@ SPEC_PPM = float(os.environ.get("SPEC_PPM", 10.0))
 # GATES sweeps a gated gamma: a molecule whose best spectral match (mean cosine per
 # spectrum) reaches the gate keeps GAMMA, the rest get GAMMA_HI. A strong library
 # match is class 1, where a high gamma lets fingerprint-similar decoys outvote it.
-GATES = tuple(float(x) for x in os.environ.get("GATES", "2").split(","))
+# The default 0 is no gate: every molecule gets GAMMA, as submit() does. It was 2 until
+# 2026-10-17, which no mean cosine reaches, so every eval silently used GAMMA_HI (128)
+# whatever GAMMA said (RESULTS.md section 24).
+GATES = tuple(float(x) for x in os.environ.get("GATES", "0").split(","))
 GAMMA_HI = float(os.environ.get("GAMMA_HI", 128.0))
 DELTAS = tuple(float(x) for x in os.environ.get("DELTAS", "0").split(","))
 # C2_BANNED=1 also removes class 2 answers from the candidate list: tests whether the
@@ -136,7 +139,7 @@ def fits(an, key_, pm, add):
     return any(abs(m - (pm - ADDUCTS[a][0])) <= m * SPEC_PPM * 1e-6 for a in add)
 
 
-def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=2.0):
+def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0):
     preds, sizes, kept = {1: {}, 2: {}, 3: {}}, [], []
     for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
         if SPEC_MASS != "0":

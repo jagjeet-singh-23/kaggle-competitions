@@ -615,6 +615,10 @@ submission.
 
 ## 17. Leak-free covered class 3: ranking quality is 0.40, not 0.56
 
+> **Gamma here is 128, not 32** (section 24): `dilute.py`'s default gate sent every
+> molecule to `GAMMA_HI`. Reproduced exactly on 2026-10-17; at a real gamma 32 this
+> model scores class 1 0.9058, class 3 0.3492, `C2_BANNED=1` LB 0.3869.
+
 One split for both open questions: `C1_LIB=enveda-180 C3_COVERED=1
 SPLIT_OUT=data/splits_c1cov3.npz python3 split.py` (class 1 from enveda-180, class 3 all
 in COCONUT, 200 molecules each). The model was retrained without its 6,590 held-out
@@ -691,6 +695,8 @@ bits cost nothing; the rest is the accuracy of the predicted separating bits.
 
 ## 21. A ranking loss over the pool lifts class 3: 0.397 -> 0.449
 
+> **Gamma here is 128, not 32** (section 24). Val pool-MRR does not depend on gamma.
+
 `FP_RANK=1` adds cross-entropy over the spectrum's own 5 ppm pool (index + COCONUT,
 split's banned structures excluded, up to 64 candidates) on soft tanimoto / tau (0.05),
 answer as target, to the BCE. Fine-tuned from section 17's model for 2 epochs, cosine lr
@@ -711,6 +717,11 @@ lambda 1, tau 0.05, 2 epochs (pool-MRR still rising). The class 2 jump (+0.21) i
 in-index kind section 16 showed does not reach the leaderboard; it is not counted.
 
 ## 22. The shipped model with the ranking loss
+
+> **Gamma here is 128, not 32** (section 24), while v12 ships gamma 32 with no gate.
+> Reproduced for `fpmodel.pt`; at a real gamma 32 it scores class 1 0.9262, class 3
+> 0.0322, `C2_BANNED=1` LB 0.1574. The leaderboard gain of v12 stands; the held-out
+> estimate made for it was measured at the wrong gamma.
 
 `fpmodel.pt` (v9's model, excludes `splits.npz`) fine-tuned exactly as section 21:
 `SPLITS=data/splits.npz FP_INIT=data/fpmodel.pt FP_RANK=1 FP_COSINE=1
@@ -736,6 +747,8 @@ actual +0.016 is above it, so at least one of those three was too conservative. 
 
 ## 23. Softer ranking loss (tau 0.1) is worse; the rest of the sweep is open
 
+> **Gamma here is 128, not 32** (section 24).
+
 Section 21's setup with `FP_TAU=0.1` (2 epochs, cosine, same init, same split, gamma 32):
 
 | tau | val pool-MRR (ep 1 / ep 2) | class 1 | class 2 | class 3 quality | `C2_BANNED=1` LB |
@@ -749,3 +762,51 @@ tau 0.025, lambda 0.3 / 3, 4 epochs, lower lr, RANK_K (a first tau 0.025 run was
 by the memory guard before its first epoch; the machine was shared with Firefox and a
 1.7 GB server). `FP_LR` and `FP_RANK_K` are now env knobs (defaults 1e-3 / 64 unchanged).
 The plan for these runs is in PLAN_MAC.md.
+
+## 24. The eval ran at gamma 128; at the shipped gamma 32 no tuned tau beats the baseline
+
+**Eval bug.** `dilute.py` gained gating in 3c810a7 (2026-10-10) with a default gate of 2.
+A molecule keeps `GAMMA` only when its mean cosine per spectrum reaches the gate, which a
+cosine never does, so every eval without an explicit `GATES` scored at `GAMMA_HI` = 128
+whatever `GAMMA` said. Sections 17-23 are affected (§17 and §22 reproduced exactly at
+gamma 128); §15-16 set the gate and are not. `submit()` ships gamma 32 with no gate, so
+the held-out numbers and the submissions used different gammas. The default is now 0
+(no gate): `GAMMA` takes effect.
+
+**Sweep on the Mac** (Apple M4, 16 GB, CPU, 12.5 min/epoch against ~50 on the Linux box).
+Section 21's setup, one knob changed at a time. Epoch 0 pool-MRR 0.5313 and the baseline's
+epochs 0.6151 / 0.6294 match Linux, but its class 3 at gamma 128 came out 0.4283 against
+0.4486, so the rows are compared with the Mac baseline. Val pool-MRR is the last epoch:
+
+| model | knobs | val pool-MRR | val tanimoto |
+|---|---|---|---|
+| mac | tau 0.05 (section 21) | 0.6294 | 0.324 |
+| t025 | tau 0.025 | 0.6616 | 0.291 |
+| t0125 | tau 0.0125 | 0.6833 | 0.238 |
+| t00625 | tau 0.00625 | 0.7066 | 0.175 |
+| t025_l3 | tau 0.025, lambda 3 | 0.6666 | 0.285 |
+| best4 | tau 0.00625, 4 epochs | 0.7123 | 0.178 |
+| lr4 | lr 1e-4 | 0.5951 at epoch 1, stopped | |
+
+`C2_BANNED=1` LB (class 1 / class 3) by gamma, no gate:
+
+| gamma | mac | t0125 | t00625 | best4 |
+|---|---|---|---|---|
+| 16 | **0.3936** (0.912 / 0.356) | 0.3837 | 0.3623 | 0.3820 |
+| **32 (shipped)** | **0.4322** (0.918 / 0.407) | 0.4180 (0.911 / 0.389) | 0.3948 | 0.4104 (0.908 / 0.380) |
+| 64 | 0.4422 | **0.4497** | 0.4342 | 0.4486 |
+| 128 | 0.4459 (0.902 / 0.428) | 0.4675 (0.934 / 0.452) | 0.4558 | **0.4721** (0.919 / 0.461) |
+| 256 | 0.4505 | 0.4707 | 0.4687 | **0.4843** (0.933 / 0.475) |
+
+A sharper tau lowers val tanimoto (0.32 -> 0.18): the predicted fingerprint stops being
+calibrated and the `GAMMA * tanimoto` term shrinks, so it needs a larger gamma to weigh
+the same. Tau and gamma are one knob. At gamma 128 tau looks like the biggest lever found
+(+0.026 LB); at the shipped 32 every tuned tau loses to the baseline. Held-out also asks
+for more gamma for every model, the baseline included, which §15-16 showed does not reach
+the leaderboard. By the submission rule at the shipped gamma nothing beats v12: **keep
+v12.** Lower lr is worse at any gamma (stopped by the epoch-1 rule).
+
+Open: whether a sharper tau plus a matching gamma is real can only be shown on the
+leaderboard (a t0125 or best4 fine-tune on `splits.npz`, shipped at gamma 128). A score
+that does not depend on the tanimoto scale (rank or z-score within the pool) would
+let model and gamma be tuned apart.
