@@ -1040,3 +1040,58 @@ The evals move +0.004-0.006 on the leak-free split and -0.001-0.003 on `splits.n
 inside §26's noise, the latter from 16 class 3 molecules. Members fine-tuned from one init
 are correlated; the gain is a variance cut, not a new signal. Candidate for v15 (v14 plus
 the ensemble), to submit only after v14's score is in so each change is measured alone.
+
+## 30. A bigger split, class 3 by documentation, and how noisy the LB is
+
+`splits_big.npz` (`N_PER_CLASS=400,400,1000`, `C1_LIB=enveda-180 C3_COVERED=1`; the default
+still rebuilds `splits_c1cov3.npz` bit for bit) with its own leak-free BCE base
+(`fpmodel_big.pt`, 6 epochs, 26 min) and v12's ranking config at `FP_SEED` 0-3
+(`fpmodel_big_rank_s*.pt`, val mol-MRR 0.696-0.701). Raw gamma 32, `C2_BANNED=1`:
+
+| model | class 1 | class 3 | LB column | + prior w 0.5 gate 0.8: class 3 | LB column |
+|---|---|---|---|---|---|
+| s0 | 0.9195 | 0.4178 | 0.4400 | 0.4789 | 0.4848 |
+| s1 | 0.9225 | 0.4167 | 0.4394 | 0.4783 | 0.4848 |
+| s2 | 0.9171 | 0.4175 | 0.4393 | 0.4815 | 0.4861 |
+| s3 | 0.9161 | 0.4172 | 0.4391 | 0.4729 | 0.4799 |
+| ensemble of 4 | 0.9174 | **0.4225** | 0.4432 | **0.4819** | 0.4866 |
+
+Four seeds span 0.001 in class 3 against 0.015 on the 200-molecule split, so the big split
+resolves differences of a few thousandths. The ensemble's +0.005 is real and small.
+
+**Class 3 by documentation** (`STRATA=1`: the answer's COCONUT synonym count), s0:
+
+| synonyms | n | no prior | prior | delta |
+|---|---|---|---|---|
+| 0-1 | 246 | 0.400 | 0.347 | -0.053 |
+| 2-4 | 168 | 0.417 | 0.429 | +0.012 |
+| 5-19 | 314 | 0.371 | 0.475 | +0.104 |
+| 20+ | 272 | 0.488 | 0.633 | +0.145 |
+
+The 200-molecule split gives the same shape (-0.079 / +0.037 / +0.105 / +0.142). The prior
+can only help a documented answer, and pushes an undocumented one below its documented isomers.
+
+**The coverage scale, not documentation, accounts for v14.** The `LB` column of a covered
+split weights class 3 as if all of it were in COCONUT; the hidden test's coverage is ~12%
+(HANDOFF), so a class 3 delta reaches the LB as `0.735 x 0.12 x delta`. Per molecule the
+prior moves 38% of class 3 answers, mean +0.061, sd 0.211. Over the ~35 covered hidden
+molecules that is an LB SE of ~0.003 (0.0037 at 50), and the prediction for v14 is +0.0054
+(class 1 -0.002 x 0.14 aside). It scored +0.002: one SE. The documentation shift may be real
+too, but one LB point at this noise cannot separate it from chance.
+
+**v13 does not fit.** Its config on the big split (`fpmodel_big_t0125.pt`, std gamma 2.62,
+val mol-MRR 0.751) against s0 at raw 32:
+
+| | class 1 | class 2 plain | class 3 | 0-1 | 2-4 | 5-19 | 20+ |
+|---|---|---|---|---|---|---|---|
+| v12's config | 0.9195 | 0.5175 | 0.4178 | 0.400 | 0.417 | 0.371 | 0.488 |
+| v13's config | 0.9167 | 0.6182 | 0.4441 | 0.436 | 0.416 | 0.398 | 0.522 |
+
+Every term and every stratum is level or better, scaled +0.002 or more; it scored -0.007,
+~3 SE off. Only 46 COCONUT structures have Enveda spectra, so a class 3 with Enveda queries
+cannot be built to test whether the instrument is the difference, and after trimming
+Enveda spectra carry as many peaks as GNPS's (median 24 vs 27). Open.
+
+Rules that follow, in HANDOFF: scale class 3 by coverage; read an LB delta under ~0.005 as
+noise; submit a change only when its scaled prediction is at least +0.005. v15 (v14 plus the
+ensemble) was submitted expecting a tie (+0.0005).

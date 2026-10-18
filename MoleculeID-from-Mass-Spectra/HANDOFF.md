@@ -1,6 +1,6 @@
 # Handoff — CASMI 2026 (as of 2026-10-18)
 
-Read RESULTS.md §11–29 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–30 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
@@ -8,16 +8,15 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - Competition: `enveda-CASMI26-molecule-id-mass-spectra`, MRR@25 on InChIKey14, closes 14 Dec 2026.
 - **Best LB 0.254 (v14)**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
   molecule (§14), fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**, §21–22)
-  plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002
-  where the leak-free eval promised far more: held-out answers are better documented than the test's.
+  plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002;
+  the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v14 (0.254, best)**. `kernel/code/`
-  (git-ignored) holds v14: the repo's code, `fpmodel.pt` = `data/fpmodel_rank.pt` (v12's model) and
-  `coconut_meta.npz` = `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env.
-  **Select v14 for the final ranking** (v12 as the second pick).
-- Next candidate (v15): v14 with a 4-seed ensemble, `FP_MODEL=data/fpmodel_rank.pt,data/fpmodel_rank_s{1,2,3}.pt`
-  (§29: val mol-MRR +0.010, evals within noise). In the kernel: ship the three extra `.pt` and set
-  `fingerprint.MODEL` to the comma list.
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v15** (submitted 2026-10-18, score
+  pending): v14 plus a 4-seed ensemble (§29). `kernel/code/` (git-ignored) holds v15: the repo's code, `fpmodel.pt` =
+  `data/fpmodel_rank.pt` (v12's model), `fpmodel_s{1,2,3}.pt` = `data/fpmodel_rank_s{1,2,3}.pt`, `coconut_meta.npz` =
+  `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env and the comma-separated
+  `fingerprint.MODEL`. v15 was expected to tie v14 (scaled eval +0.0005). **Select v14 for the final ranking** unless
+  v15 scores higher (v12 as the second pick).
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
   so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
   `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at raw gamma.
@@ -71,8 +70,9 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
   quality came from the leaky `fpmodel.pt`, and a leak-free one is lower, so the true figure is probably somewhat higher.
   Do not quote 12.4% as exact.
 - A held-out delta therefore reaches the LB roughly as
-  `0.140·Δclass1(Enveda split) + 0.126·Δclass2(C2_BANNED=1) + 0.735·coverage·Δquality(covered split)`, and the eval
-  overstates every term (see the section below). Predicted absolute levels are not calibrated; use deltas only.
+  `0.140·Δclass1(Enveda split) + 0.126·Δclass2(C2_BANNED=1) + 0.735·coverage·Δquality(covered split)`, with
+  coverage ~0.12. The covered splits' own `LB` column leaves coverage at 1 and so inflates class 3 deltas ~8x (see the
+  section below). Predicted absolute levels are not calibrated; use deltas only.
 
 **Conclusions in RESULTS.md that later sections overturned**
 
@@ -104,12 +104,19 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
 
 ## What the eval can and cannot tell you (§15–16, §17, §21)
 
-- **The held-out eval overstates every gain several-fold, in every run so far** (v4 class 3, gamma 64, v12 +0.006..0.011
-  predicted vs +0.016 real is the only exception, v13 predicted + and lost, v14 predicted ~+0.04 and got +0.002). Held-out
-  answers are structures with public library spectra: well-known, well-documented compounds. The hidden test's class 3 is
-  not, so anything that favours "known" structures (priors, the index's own structures, sharper isomer separation tuned on
-  them) looks far better held-out than it is. **Read an eval gain as a direction at most; only the LB sizes it.** Never
-  raise a weight because the eval likes it more.
+- **Scale class 3 by coverage before comparing with the LB.** The covered splits' `LB` column assumes class 3 is 100%
+  in COCONUT; the hidden test is ~12%. Unscaled, every class 3 gain looks ~8x too big: v14's column said +0.044, the
+  scaled prediction is +0.005 ± 0.003, the LB gave +0.002 (§30). (An earlier version of this file blamed better-documented
+  held-out answers for the whole gap; the coverage scale explains v14 without that.)
+- **The LB is noisy for a ranking change: ±0.003–0.005.** Only the ~35 covered hidden class 3 molecules carry it (fewer if
+  the public LB is a subset), and a change moves a third of them by ~0.2 each (§30). An LB delta under ~0.005 is noise in
+  either direction; submit a change to learn something only if its scaled prediction is ≥ +0.005.
+- **How documented the answer is matters for anything that favours known structures.** The synonym prior gains +0.10–0.15
+  on answers with 5+ COCONUT synonyms and loses −0.05 on 0–1 (`STRATA=1`, §30). The hidden test's mix is not identifiable
+  from one LB point. Do not raise the prior's weight on the eval's word.
+- **v13 is still unexplained**: on `splits_big.npz` its config beats v12's in every term and every documentation stratum
+  (scaled +0.002), and it scored −0.007, ~3 SE off. Something about the hidden test hurts the std-normalised term or the
+  sharp-tau model that no held-out split shows.
 - The held-out eval over-rewards scoring-weight changes: the gain is **class 2 whose answer sits in the index's own
   structures**, which does not reach the LB. With class 2 answers banned (`C2_BANNED=1`) gamma variants tie, like the LB.
 - **Rule before any submission:** a change must improve the `C2_BANNED=1` eval, or class 1 / class 3, not just ordinary
@@ -117,7 +124,8 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
 - Class 3 quality needs a **covered** split and a **leak-free** model: `splits_c1cov3.npz` + `fpmodel_c1cov3.pt`
   (BCE baseline 0.397 and leaky 0.557 at gamma 128, §17; the §21 ranking baseline is 0.407 at the shipped gamma 32, §26). Class 3 of `splits.npz` is 16 covered molecules: noise.
 - **Retraining the same config moves 200-molecule class 3 by up to 0.025 and its LB by up to 0.019** (float rounding
-  alone, §26); val pool-MRR / mol-MRR moves 0.001. Judge model changes on val MRR; class 3 under ~0.025 is noise.
+  alone, §26); val pool-MRR / mol-MRR moves 0.001. On `splits_big.npz` (1000 class 3) four seeds span **0.001** in class 3
+  and 0.0009 in the `C2_BANNED=1` column (§30): use that split.
 - The v12 estimate from held-out deltas was +0.006..+0.011; the real gain was +0.016. `C2_BANNED=1` delta (+0.021)
   was the closer predictor.
 
@@ -134,6 +142,9 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |
 | `fpmodel_c1cov3_{mac,t025,t0125,t00625,t025_l3,best4,lr4}.pt` | `splits_c1cov3.npz` rows | §24 sweep, Mac only; `mac` = §21 rerun |
+| `fpmodel_big.pt` | `splits_big.npz` rows | leak-free BCE base for the big split (6 ep, 26 min on the Mac) |
+| `fpmodel_big_rank_s{0,1,2,3}.pt` | `splits_big.npz` rows | v12's config on the big split, 4 seeds (§30) |
+| `fpmodel_big_t0125.pt` | `splits_big.npz` rows | v13's model (tau 0.0125) on the big split (§30) |
 | `fpmodel_c1cov3_s{1,2,3}.pt` | `splits_c1cov3.npz` rows | §29, baseline config at `FP_SEED` 1–3 |
 | `fpmodel_c1cov3_{mol4,mol4_l4}.pt` | `splits_c1cov3.npz` rows | §25, molecule-averaged ranking loss (not better) |
 | `fpmodel_c1env.pt` | `splits_c1env.npz` rows | §16; not used since §17 |
@@ -168,7 +179,9 @@ Splits (`split.py`, env `SPLIT_OUT`):
 - `data/splits.npz` — ordinary.
 - `data/splits_cov3.npz` — `C3_COVERED=1`, class 3 all in COCONUT (leaky with `fpmodel.pt`).
 - `data/splits_c1env.npz` — `C1_LIB=enveda-180`, class 1 from Enveda spectra (hidden test is Enveda data).
-- `data/splits_c1cov3.npz` — both of the above. **The one to use.**
+- `data/splits_c1cov3.npz` — both of the above, 200 per class.
+- `data/splits_big.npz` — the same at 400 / 400 / 1000 (`N_PER_CLASS=400,400,1000`). **The one to use**, with
+  `STRATA=1`; models `fpmodel_big*.pt`.
 
 `dilute.py` env knobs: `SPLITS`, `FP_MODEL`, `FRACS=1` (full COCONUT), `GAMMA`, `GATES`+`GAMMA_HI` (default gate 0 =
 no gate; it was 2 = always `GAMMA_HI` until 2026-10-17), `DELTAS`,
@@ -179,7 +192,7 @@ The merged pool cache is one directory per pool under `data/pool/` (§28); concu
 
 Standard eval (FRACS=1: 1–2 min, 5–6 GB peak; always run with and without `C2_BANNED=1`):
 ```bash
-SPLITS=data/splits_c1cov3.npz FP_MODEL=data/fpmodel_c1cov3_<name>.pt FRACS=1 GAMMA=32 \
+SPLITS=data/splits_big.npz FP_MODEL=data/fpmodel_big_<name>.pt FRACS=1 GAMMA=32 STRATA=1 \
   MIN_AVAIL_MB=2500 ../guard.sh python3 dilute.py            # add C2_BANNED=1 for the second run
 ```
 
