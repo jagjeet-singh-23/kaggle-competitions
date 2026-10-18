@@ -6,17 +6,17 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 ## Where we stand
 
 - Competition: `enveda-CASMI26-molecule-id-mass-spectra`, MRR@25 on InChIKey14, closes 14 Dec 2026.
-- **Best LB 0.254 (v14)**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
+- **Best LB 0.257 (v15)** = v14 + a 4-seed fingerprint ensemble (§29); **v14 0.254**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
   molecule (§14), fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**, §21–22)
   plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002;
   the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v15** (submitted 2026-10-18, score
-  pending): v14 plus a 4-seed ensemble (§29). `kernel/code/` (git-ignored) holds v15: the repo's code, `fpmodel.pt` =
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v15 (0.257, best)**: v14 plus a 4-seed
+  ensemble (§29). `kernel/code/` (git-ignored) holds v15: the repo's code, `fpmodel.pt` =
   `data/fpmodel_rank.pt` (v12's model), `fpmodel_s{1,2,3}.pt` = `data/fpmodel_rank_s{1,2,3}.pt`, `coconut_meta.npz` =
   `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env and the comma-separated
-  `fingerprint.MODEL`. v15 was expected to tie v14 (scaled eval +0.0005). **Select v14 for the final ranking** unless
-  v15 scores higher (v12 as the second pick).
+  `fingerprint.MODEL`. v15 was expected to tie v14 (scaled eval +0.0005) and scored +0.003, inside the LB's noise:
+  the ensemble is not shown to be worth +0.003, only not to hurt. **Select v15 for the final ranking** (v14 second).
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
   so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
   `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at raw gamma.
@@ -38,7 +38,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v11 | gated gamma (0.7 / 128) | 0.236 |
 | v12 | fpmodel + in-pool ranking loss (§21–22), gamma 32, no gate | **0.252** |
 | v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
-| v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | **0.254** |
+| v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | 0.254 |
+| v15 | v14 + 4-seed fingerprint ensemble (§29) | **0.257** |
 
 ## Read first: what looks like a fact but is not
 

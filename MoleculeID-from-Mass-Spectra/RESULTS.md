@@ -1095,3 +1095,7 @@ Enveda spectra carry as many peaks as GNPS's (median 24 vs 27). Open.
 Rules that follow, in HANDOFF: scale class 3 by coverage; read an LB delta under ~0.005 as
 noise; submit a change only when its scaled prediction is at least +0.005. v15 (v14 plus the
 ensemble) was submitted expecting a tie (+0.0005).
+
+**Leaderboard: v15 scored 0.257 against v14's 0.254.** The scaled eval predicted +0.0005; the
++0.003 is within the LB's ±0.003-0.005 noise, so it shows the ensemble does not hurt, not
+that it is worth 0.003. v15 is the best submission and the one to select.
