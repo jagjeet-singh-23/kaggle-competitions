@@ -120,7 +120,7 @@ Splits (`split.py`, env `SPLIT_OUT`):
 no gate; it was 2 = always `GAMMA_HI` until 2026-10-17), `DELTAS`,
 `FORMULA_ORACLE=1`, `TRUE_ADDUCT` (default 1), `SPEC_MASS`, `C2_BANNED=1`, `GAMMAS`/`NORMS` sweeps,
 `PRIOR`+`PRIOR_WS`+`PRIOR_GATES`+`PRIOR_FILL` (§28). Search: `SIM=cos|rev|hyb`. A comma-separated `FP_MODEL` is an
-ensemble (mean probability). Val MRR of any model/ensemble: `data/jobs/val_mrr.py`.
+ensemble (mean probability). Val MRR of any model/ensemble: `val_mrr.py`.
 The merged pool cache is one directory per pool under `data/pool/` (§28); concurrent runs are safe since.
 
 Standard eval (FRACS=1: 1–2 min, 5–6 GB peak; always run with and without `C2_BANNED=1`):

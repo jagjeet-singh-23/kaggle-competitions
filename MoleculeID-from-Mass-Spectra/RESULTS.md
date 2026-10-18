@@ -1016,7 +1016,7 @@ weight is not justified by the eval alone.
 ## 29. Seed ensembles: +0.008 val mol-MRR, inside the eval's noise
 
 `FP_SEED` 1-3 of the baseline config (tau 0.05, lambda 1, 2 epochs; ~13 min each) plus
-the seed-0 run, on the leak-free split. Val from `data/jobs/val_mrr.py` (train()'s val
+the seed-0 run, on the leak-free split. Val from `val_mrr.py` (train()'s val
 structures); eval raw gamma 32, `C2_BANNED=1`, without / with the §28 prior (w 0.5, gate 0.8):
 
 | model | val pool-MRR | val mol-MRR | LB | LB + prior (class 3) |
