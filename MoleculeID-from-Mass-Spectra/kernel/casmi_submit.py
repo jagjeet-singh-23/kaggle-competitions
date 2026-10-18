@@ -69,10 +69,14 @@ os.environ["CASMI_DATA"] = COMP          # read-only competition files
 os.environ["CASMI_WORK"] = "/tmp/casmi"  # writable scratch, not committed as output
 os.makedirs("/tmp/casmi", exist_ok=True)
 sys.path.insert(0, CODE)
-# Fingerprint term normalised by its spread within each pool, at the weight the v12
-# model gets from raw gamma 32 (RESULTS.md section 27). fpsearch reads both at import.
-os.environ["FP_NORM"] = "std"
-os.environ["GAMMA"] = "2.62"
+# v12's scoring (raw fingerprint term, gamma 32) plus a popularity prior: log1p of a
+# candidate's COCONUT synonym count, weight 0.5, skipped for molecules whose best
+# library match reaches cosine 0.8 (RESULTS.md section 28). The normalised term of v13
+# scored 0.245 against v12's 0.252 and is not used. prior reads these at import.
+os.environ["PRIOR"] = "syn"
+os.environ["PRIOR_W"] = "0.5"
+os.environ["PRIOR_GATE"] = "0.8"
+os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -123,7 +127,9 @@ analog.build()
 step("fingerprints and exact masses built")
 
 fpsearch.submit("/kaggle/working/submission.csv")
-step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'})")
+import prior                             # noqa: E402
+step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'}, "
+     f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")

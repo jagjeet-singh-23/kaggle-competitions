@@ -31,9 +31,12 @@ Sharded and resumable, which the first version was not.
     python3 external.py            -> coverage of the held-out classes
 """
 import csv
+import hashlib
 import io
 import os
+import shutil
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -184,7 +187,12 @@ def merge(key, smiles, mass, fp, cache=None):
     the pool from 5.3 GB of RAM to about 0.6 GB. key and mass stay in memory because
     every lookup and every mass window scans them whole.
 
-    A cache is reused when its row count matches, so the merge runs once.
+    Each pool gets its own subdirectory, named by a hash of the shard list and the
+    index keys: every banned set is a different pool, and while they shared one
+    directory a training run and an eval with C2_BANNED=1 rebuilt it in place under
+    each other's memory maps and the eval scored garbage (2026-10-18). A pool is built
+    in a private temporary directory and renamed into place, so a reader never sees a
+    half-written one.
     """
     fs = shards()
     assert fs, f"no shards in {OUT}"
@@ -211,22 +219,22 @@ def merge(key, smiles, mass, fp, cache=None):
     n = len(key) + sum(int(m.sum()) for m in masks)
 
     if cache:
-        os.makedirs(cache, exist_ok=True)
-        paths = {k: f"{cache}/{k}.npy" for k in ("key", "smiles", "mass", "fp")}
         # The signature is the shard list with sizes, not just the row count: two
         # different databases can agree on a count, and silently reusing the wrong
-        # pool would look like a scoring change rather than a stale file.
+        # pool would look like a scoring change rather than a stale file. The index
+        # keys are hashed in because two banned sets of one size also agree on it.
         sig = "\n".join(f"{f} {os.path.getsize(f)}" for f in fs) + f"\n{n}\n"
-        sigfile = f"{cache}/sources.txt"
-        fresh = (os.path.exists(sigfile)
-                 and open(sigfile).read() == sig
-                 and all(os.path.exists(p) for p in paths.values()))
-        if fresh:
-            got = {k: np.load(p, mmap_mode="r") for k, p in paths.items()}
+        final = f"{cache}/{hashlib.sha1(sig.encode() + key.tobytes()).hexdigest()[:16]}"
+        names = ("key", "smiles", "mass", "fp")
+        if os.path.exists(f"{final}/sources.txt") and open(f"{final}/sources.txt").read() == sig:
+            got = {k: np.load(f"{final}/{k}.npy", mmap_mode="r") for k in names}
             if len(got["key"]) == n:
-                print(f"external pool cached at {cache}")
+                print(f"external pool cached at {final}")
                 return (np.asarray(got["key"]), got["smiles"],
                         np.asarray(got["mass"]), got["fp"], n - len(key))
+        os.makedirs(cache, exist_ok=True)
+        build = tempfile.mkdtemp(prefix=".build-", dir=cache)
+        paths = {k: f"{build}/{k}.npy" for k in names}
 
     def alloc(name, dtype, shape):
         if not cache:
@@ -252,12 +260,17 @@ def merge(key, smiles, mass, fp, cache=None):
     if cache:
         for v in out.values():
             v.flush()
-        open(sigfile, "w").write(sig)     # only after every array is on disk
-        # key and mass are read in full on every query; reopen the wide two read-only
+        open(f"{build}/sources.txt", "w").write(sig)     # only after every array is on disk
+        k_, m_ = np.array(out["key"]), np.array(out["mass"])
+        del out
+        try:
+            os.rename(build, final)
+        except OSError:                   # another process finished the same pool first
+            shutil.rmtree(build)
+        # key and mass are read in full on every query; open the wide two read-only
         # so the pages can be dropped under pressure instead of counting as dirty.
-        return (np.array(out["key"]), np.load(paths["smiles"], mmap_mode="r"),
-                np.array(out["mass"]), np.load(paths["fp"], mmap_mode="r"),
-                n - len(key))
+        return (k_, np.load(f"{final}/smiles.npy", mmap_mode="r"), m_,
+                np.load(f"{final}/fp.npy", mmap_mode="r"), n - len(key))
     return out["key"], out["smiles"], out["mass"], out["fp"], n - len(key)
 
 

@@ -935,3 +935,72 @@ sharp tau plus normalisation does not reach the hidden test. `splits.npz` class 
 warning that pointed the right way. v12 stays best and is the one to select for the final
 ranking. The repo's `kernel/casmi_submit.py` and `kernel/code/` are v13; resubmitting v12 means
 removing the two `os.environ` lines and shipping `data/fpmodel_rank.pt` again.
+
+## 28. A popularity prior from COCONUT's metadata: class 3 0.407 -> 0.467
+
+Isomers inside the 5 ppm window are what retrieval loses to (§10-11), and the spectrum
+separates them badly. Molecules that get measured as reference standards are the
+documented ones, and COCONUT records documentation per entry. The October 2026 release CSV
+(CC0, `coconut_csv-10-2026.zip`, 739k rows) is reduced by `data/jobs/coconut_meta.py` to one
+row per InChIKey14 (`data/coconut_meta/meta.npz`, 480k keys): counts of synonyms,
+organisms, collections and DOIs, CAS and name flags, annotation level, NP-likeness.
+`prior.py` loads one feature (`PRIOR`), counts as log1p; `dilute.py` adds `w * prior` to
+every candidate (`PRIOR_WS`), keys COCONUT lacks get `PRIOR_FILL` (0).
+
+Class 3 answers of the leak-free split have a median of 6 synonyms; COCONUT's median is 1
+and 15% of it has 5 or more. Leak-free split, `fpmodel_c1cov3_mac.pt`, raw gamma 32,
+`C2_BANNED=1` LB (class 1 / class 3):
+
+| feature | w 0.25 | w 0.5 | w 1 | w 2 |
+|---|---|---|---|---|
+| none (w 0) | 0.4322 (0.918/0.407) | | | |
+| **syn** | 0.4677 | **0.4788** (0.913/0.470) | **0.4861** (0.905/0.482) | 0.4706 |
+| coll | 0.4461 | 0.4544 | 0.4674 | 0.4714 (0.901/0.464) |
+| doi | 0.4419 | 0.4477 | 0.4634 | 0.4377 |
+| cas | 0.4419 | 0.4522 | 0.4567 | 0.4593 |
+| name | 0.4417 | 0.4478 | 0.4490 | 0.4509 |
+| org | 0.4429 | 0.4464 | 0.4452 | 0.4143 |
+| annot | 0.4465 | 0.4497 | 0.4299 | 0.4098 |
+| npl | 0.4293 | 0.4288 | 0.4113 | 0.3906 |
+
+The second training of the same config (`mac_repro`) agrees: class 3 0.416 -> 0.473 (w 0.5)
+/ 0.485 (w 0.75), class 1 0.911 -> 0.907 / 0.906. That is +0.06 class 3, three times the
+§26 noise, and the largest single gain this eval has shown for a model-free change.
+
+The cost is class 1: its answers are rarely in COCONUT (1% on the leak-free split), so
+every documented COCONUT isomer gains on them. Filling missing keys with a positive value
+protects class 1 and gives back class 3 (fill 1: class 3 0.458 at w 0.5; fill 3.4: 0.421),
+because the index's wrong structures in a class 3 pool are the ones it boosts. A gate does
+better: `PRIOR_GATES` skips molecules whose best library match (mean cosine per spectrum)
+reaches the gate. On `splits.npz` with v12's model (public-library class 1):
+
+| w | gate | class 1 | `C2_BANNED=1` LB |
+|---|---|---|---|
+| 0 | - | 0.9215 | 0.1709 |
+| 0.5 | none | 0.9110 | 0.1703 |
+| **0.5** | **0.8** | **0.9186** | 0.1713 |
+| 0.75 | 0.8 | 0.9182 | 0.1709 |
+| 1 | 0.8 | 0.9183 | 0.1695 |
+
+On the leak-free split the gate leaves class 1 at 0.913 (its losses are weak matches) and
+costs class 3 0.003 at w 0.5 (0.467). Class 3 of `splits.npz` is 16 molecules the leaky
+model trained on and does not move. **Shipped as v14: v12 model, raw gamma 32, `PRIOR=syn
+PRIOR_W=0.5 PRIOR_GATE=0.8`** (`submit()` reads the same knobs; the kernel ships
+`coconut_meta.npz`). The smaller weight because held-out answers come from public spectral
+libraries and may be better documented than the hidden test's; the leaderboard decides.
+The local `test.parquet` cannot check this: every molecule in it has a library match at
+cosine ~1.0, so the gate skips all of them.
+
+**A pool-cache bug the gate sweep found.** `external.merge` cached the merged pool in one
+`data/pool/` and rebuilt it in place whenever the row count changed, which it does for
+every banned set. A training run starting during an eval with `C2_BANNED=1` rewrote the
+files under the eval's memory maps, and the eval printed class 2 and 3 as 0.0000 from that
+point. Each pool now has its own directory named by a hash of the shard list and the index
+keys, built in a temporary directory and renamed into place. Earlier evals ran one at a
+time or against a training run that had already loaded its pool; their numbers reproduce.
+
+`FP_SEED` (training order, pool negatives, dropout; not the val structures) and ensembles
+(`FP_MODEL=a.pt,b.pt`: the mean of the members' probabilities, `fpsearch.Ensemble`) are in
+for the next section. The two rounding-only trainings `mac` + `mac_repro` ensembled score
+their average (0.4380 against 0.4322 / 0.4385): their predictions differ by 0.011 per bit,
+too correlated to gain.

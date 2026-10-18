@@ -56,6 +56,10 @@ MOL = int(os.environ.get("FP_MOL", 0))
 # resumes from it; it is removed when the run finishes. 0 turns it off.
 CKPT_MIN = float(os.environ.get("FP_CKPT_MIN", 5))
 STATE = MODEL + ".state"
+# FP_SEED changes the training order, the sampled pool negatives and dropout, not the
+# validation structures, so seeds of one config are comparable and can be ensembled
+# (fpsearch.load_model). 0 reproduces every run before it existed.
+SEED = int(os.environ.get("FP_SEED", 0))
 
 BIN = 1.0            # dalton; fragment m/z resolution fed to the model
 HIDDEN = int(os.environ.get("FP_HIDDEN", 1024))
@@ -64,7 +68,7 @@ NBIN = int(MZ_MAX / BIN)
 BIT_LO, BIT_HI = 0.005, 0.995   # drop bits that are almost always on or off
 DEFECT = os.environ.get("FP_DEFECT", "1") == "1"   # mass-defect channel per bin
 
-torch.manual_seed(0)
+torch.manual_seed(SEED)
 
 
 def n_features(defect=None):
@@ -306,6 +310,8 @@ def train(epochs=6, batch=256, lr=LR, limit=None, quiet=False, drop=None):
     val_struct = set(rng.choice(uniq, max(1, len(uniq) // 20), replace=False).tolist())
     is_val = np.array([r in val_struct for r in rows])
     tr, va = np.where(~is_val)[0], np.where(is_val)[0]
+    if SEED:
+        rng = np.random.default_rng(SEED)
     if not quiet:
         print(f"train {len(tr):,} spectra / val {len(va):,} "
               f"({len(val_struct):,} held-out structures)", flush=True)
@@ -321,7 +327,8 @@ def train(epochs=6, batch=256, lr=LR, limit=None, quiet=False, drop=None):
     if CKPT_MIN and os.path.exists(STATE):
         resume = torch.load(STATE, weights_only=False)
         assert (np.array_equal(resume["bits"], bits) and resume["epochs"] == epochs
-                and resume["mol"] == MOL), f"{STATE} is from a different run; delete it to start over"
+                and resume["mol"] == MOL and resume.get("seed", 0) == SEED), \
+            f"{STATE} is from a different run; delete it to start over"
     pools = None
     if RANK:
         pools = Pools()
@@ -361,7 +368,7 @@ def train(epochs=6, batch=256, lr=LR, limit=None, quiet=False, drop=None):
                      "sched": sched.state_dict() if sched else None,
                      "rng": rng.bit_generator.state, "torch_rng": torch.get_rng_state(),
                      "epoch": ep, "batch": i, "flat": flat, "gsizes": gsizes, "tot": tot,
-                     "elapsed": time.time() - t0, "bits": bits, "epochs": epochs, "mol": MOL},
+                     "elapsed": time.time() - t0, "bits": bits, "epochs": epochs, "mol": MOL, "seed": SEED},
                     STATE)
 
     start_ep, start_i, elapsed = 0, 0, 0.0

@@ -28,6 +28,7 @@ import library
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
 import formula
+import prior
 from fpsearch import FP_NORM, load_model, normalise, query_fp, TOP_K
 from metric import mrr
 from search import Searcher, spectra_of
@@ -85,6 +86,14 @@ C2_BANNED = os.environ.get("C2_BANNED") == "1"
 # GAMMAS / NORMS sweep several in one run (comma lists; "raw" or "" for no norm).
 GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", str(GAMMA)).split(","))
 NORMS = tuple("" if x == "raw" else x for x in os.environ.get("NORMS", FP_NORM or "raw").split(","))
+# PRIOR names a prior.py feature ("syn", "doi", ...); PRIOR_WS sweeps its weight, added
+# to every candidate's score (0 = off).
+PRIOR_WS = tuple(float(x) for x in os.environ.get("PRIOR_WS", "0").split(","))
+# PRIOR_GATES: a molecule whose best spectral match (mean cosine per spectrum) reaches
+# the gate gets no prior. A strong library match is class 1, whose answers COCONUT
+# rarely holds (1% on the leak-free split), so the prior can only push them down.
+PRIOR_GATES = tuple(float(x) for x in os.environ.get("PRIOR_GATES", "9").split(","))
+PRIOR_OF = prior.load()
 
 
 
@@ -144,7 +153,8 @@ def fits(an, key_, pm, add):
     return any(abs(m - (pm - ADDUCTS[a][0])) <= m * SPEC_PPM * 1e-6 for a in add)
 
 
-def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, norm=FP_NORM):
+def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, norm=FP_NORM,
+          pw=0.0, pgate=9.0):
     preds, sizes, kept, spread = {1: {}, 2: {}, 3: {}}, [], [], []
     for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
         if SPEC_MASS != "0":
@@ -178,6 +188,9 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, n
             for key_ in total:
                 smi = sm[key_].decode() if isinstance(sm[key_], bytes) else sm[key_]
                 total[key_] += delta * explained(j, key_, smi, spectra, add)
+        if pw and top_spec < pgate:
+            for key_ in total:
+                total[key_] += pw * PRIOR_OF.get(key_, prior.FILL)
         top = sorted(total.items(), key=lambda kv: -kv[1])
         top = [(sm[q].decode() if isinstance(sm[q], bytes) else sm[q]) for q, _ in top]
         if ORACLE:
@@ -211,14 +224,19 @@ def main():
             os.environ["EXT_FRAC"] = str(f)
             an = Analog(banned=banned, external=f > 0)
         cov = coverage(an, jobs)
-        for d, gt, g, nm in [(d, gt, g, nm) for d in DELTAS for gt in GATES
-                             for nm in NORMS for g in GAMMAS]:
-            v, med = score(an, bits, jobs, answers, gamma=g,
-                           ppm=f if MODE == "ppm" else None, delta=d, gate=gt, norm=nm)
+        for d, gt, g, nm, pw, pg in [(d, gt, g, nm, pw, pg) for d in DELTAS for gt in GATES
+                                     for nm in NORMS for g in GAMMAS for pw in PRIOR_WS
+                                     for pg in PRIOR_GATES]:
+            v, med = score(an, bits, jobs, answers, gamma=g, ppm=f if MODE == "ppm" else None,
+                           delta=d, gate=gt, norm=nm, pw=pw, pgate=pg)
             if len(GATES) > 1:
                 print(f"  gate {gt:g}", end="")
             if len(GAMMAS) > 1 or len(NORMS) > 1:
                 print(f"  norm {nm or 'raw':4s} gamma {g:<6g}", end="")
+            if len(PRIOR_WS) > 1:
+                print(f"  {prior.PRIOR} {pw:<5g}", end="")
+            if len(PRIOR_GATES) > 1:
+                print(f" pgate {pg:<4g}", end="")
             # MRR among molecules that are actually in the pool. If the extrapolation
             # in section 8 is sound this is flat across fractions; if it rises with f
             # the model is wrong and coverage buys less than the projection claims.

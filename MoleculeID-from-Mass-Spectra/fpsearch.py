@@ -23,6 +23,7 @@ import numpy as np
 import torch
 
 import library
+import prior
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
 from fingerprint import Net, NBIN, BIN, predict
@@ -57,11 +58,24 @@ def normalise(t, how=FP_NORM):
     return (t - t.mean()) / sd
 
 
-def load_model():
-    # Read through the module rather than a name bound at import time, so a caller
-    # (the Kaggle kernel) can point it at a shipped checkpoint.
-    path = fingerprint.MODEL
-    assert os.path.exists(path), "run `python3 fingerprint.py --train --holdout` first"
+class Ensemble(torch.nn.Module):
+    """Several checkpoints of one bit set as one model: the mean of their probabilities.
+
+    forward returns logits so that fingerprint.predict, which applies the sigmoid, is
+    unchanged. Retraining one config moves the eval by up to 0.025 (RESULTS.md 26), so
+    a mean over seeds should be steadier than any one of them.
+    """
+    def __init__(self, models):
+        super().__init__()
+        self.models = torch.nn.ModuleList(models)
+
+    def forward(self, x):
+        p = torch.stack([torch.sigmoid(m(x)) for m in self.models]).mean(0)
+        return torch.logit(p, eps=1e-7)
+
+
+def load_one(path):
+    assert os.path.exists(path), f"{path}: run `python3 fingerprint.py --train --holdout` first"
     ck = torch.load(path, weights_only=False)
     bits = ck["bits"]
     # Rebuild the exact architecture the checkpoint was trained with, and put the
@@ -72,7 +86,20 @@ def load_model():
     m = Net(fingerprint.n_features(), len(bits), hidden=hidden)
     m.load_state_dict(ck["state"])
     m.eval()
-    return m, bits
+    return m, bits, fingerprint.DEFECT
+
+
+def load_model():
+    # Read through the module rather than a name bound at import time, so a caller
+    # (the Kaggle kernel) can point it at a shipped checkpoint. A comma-separated
+    # FP_MODEL is an ensemble of checkpoints with the same bits and features.
+    got = [load_one(p) for p in fingerprint.MODEL.split(",")]
+    if len(got) == 1:
+        return got[0][:2]
+    bits = got[0][1]
+    assert all(np.array_equal(b, bits) and d == got[0][2] for _, b, d in got), \
+        "ensemble members were trained on different drop sets or features"
+    return Ensemble([m for m, _, _ in got]).eval(), bits
 
 
 def query_fp(model, spectra):
@@ -195,6 +222,7 @@ def submit(path=None, gamma=GAMMA):
     del ix                       # Searcher keeps its own masked copy; see main()
     an = Analog()
     model, bits = load_model()
+    prior_of = prior.load() if prior.W else {}
     rows = []
     for mid, g in te.groupby("molecule_id"):
         spectra = [library.trim(a, b, p) + (p,)
@@ -222,6 +250,9 @@ def submit(path=None, gamma=GAMMA):
                 k = an.key[r]
                 total[k] = total.get(k, 0.0) + gamma * float(v)
                 sm.setdefault(k, an.smiles[r])
+        if prior_of and max(spec.values(), default=0.0) / len(spectra) < prior.GATE:
+            for k in total:
+                total[k] += prior.W * prior_of.get(k, prior.FILL)
         top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
         cands = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q] for q, _ in top]
         rows.append((mid, ";".join(cands[:TOP_K] or ["C"])))
