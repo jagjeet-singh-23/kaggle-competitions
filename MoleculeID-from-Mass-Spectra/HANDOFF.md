@@ -1,20 +1,23 @@
 # Handoff — CASMI 2026 (as of 2026-10-17)
 
-Read RESULTS.md §11–27 first; this file is the short version plus how to run things.
+Read RESULTS.md §11–29 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## Where we stand
 
 - Competition: `enveda-CASMI26-molecule-id-mass-spectra`, MRR@25 on InChIKey14, closes 14 Dec 2026.
-- **Best LB 0.252 (v12)**: search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
-  molecule (§14), with a fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**
-  (§21–22). The loss is what moved it: +0.016 over v9/v11 (0.236).
+- **Best LB 0.254 (v14)**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
+  molecule (§14), fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**, §21–22)
+  plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002
+  where the leak-free eval promised far more: held-out answers are better documented than the test's.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v13 (0.245, worse than v12)**.
-  `kernel/code/` (git-ignored) holds v13: the repo's `fingerprint.py` / `fpsearch.py` as of 9bc48ef and
-  `fpmodel.pt` = `data/fpmodel_rank_t0125.pt`; `kernel/casmi_submit.py` sets `FP_NORM=std GAMMA=2.62`.
-  To resubmit v12: drop those two env lines and ship `data/fpmodel_rank.pt` (v12 = raw gamma 32, no norm).
-  **Select v12 for the final ranking.**
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v14 (0.254, best)**. `kernel/code/`
+  (git-ignored) holds v14: the repo's code, `fpmodel.pt` = `data/fpmodel_rank.pt` (v12's model) and
+  `coconut_meta.npz` = `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env.
+  **Select v14 for the final ranking** (v12 as the second pick).
+- Next candidate (v15): v14 with a 4-seed ensemble, `FP_MODEL=data/fpmodel_rank.pt,data/fpmodel_rank_s{1,2,3}.pt`
+  (§29: val mol-MRR +0.010, evals within noise). In the kernel: ship the three extra `.pt` and set
+  `fingerprint.MODEL` to the comma list.
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
   so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
   `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at raw gamma.
@@ -33,6 +36,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v11 | gated gamma (0.7 / 128) | 0.236 |
 | v12 | fpmodel + in-pool ranking loss (§21–22), gamma 32, no gate | **0.252** |
 | v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
+| v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | **0.254** |
 
 ## What has been tried and closed
 
@@ -68,13 +72,15 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | file | trained excluding | what it is |
 |---|---|---|
 | `fpmodel.pt` | `splits.npz` rows | v9–v11 shipped model; init for the shipped fine-tune |
-| `fpmodel_rank.pt` | `splits.npz` rows | **v12 shipped** (fpmodel.pt + ranking loss 2 ep) |
+| `fpmodel_rank.pt` | `splits.npz` rows | **v12/v14 shipped** (fpmodel.pt + ranking loss 2 ep) |
+| `fpmodel_rank_s{1,2,3}.pt` | `splits.npz` rows | §29, same config at `FP_SEED` 1–3; v15 ensemble members |
 | `fpmodel_rank_t0125.pt` | `splits.npz` rows | §24, tau 0.0125 fine-tune of fpmodel.pt; v13 shipped (0.245) |
 | `fpmodel_rank_best4.pt` | `splits.npz` rows | §27, tau 0.00625 4 ep fine-tune of fpmodel.pt; not shipped |
 | `fpmodel_c1cov3.pt` | `splits_c1cov3.npz` rows | leak-free BCE baseline; **init for every tuning run** |
 | `fpmodel_c1cov3_rank.pt` | `splits_c1cov3.npz` rows | §21 result (tau 0.05, 2 ep): class 3 0.4486 |
 | `fpmodel_c1cov3_t10.pt` | `splits_c1cov3.npz` rows | §23, tau 0.1 (worse); `_e12` is §18 (12 BCE epochs) |
 | `fpmodel_c1cov3_{mac,t025,t0125,t00625,t025_l3,best4,lr4}.pt` | `splits_c1cov3.npz` rows | §24 sweep, Mac only; `mac` = §21 rerun |
+| `fpmodel_c1cov3_s{1,2,3}.pt` | `splits_c1cov3.npz` rows | §29, baseline config at `FP_SEED` 1–3 |
 | `fpmodel_c1cov3_{mol4,mol4_l4}.pt` | `splits_c1cov3.npz` rows | §25, molecule-averaged ranking loss (not better) |
 | `fpmodel_c1env.pt` | `splits_c1env.npz` rows | §16; not used since §17 |
 
@@ -94,7 +100,7 @@ SPLITS=data/splits_c1cov3.npz FP_INIT=data/fpmodel_c1cov3.pt FP_MODEL=data/fpmod
   ../guard.sh python3 fingerprint.py --train --holdout --epochs=2
 ```
 Knobs: `FP_RANK` (lambda), `FP_TAU`, `FP_RANK_K` (candidates per spectrum, 64), `FP_LR` (1e-3), `FP_COSINE`,
-`FP_MOL` (rank molecule-averaged groups, §25; 0), `FP_CKPT_MIN` (resumable checkpoint interval, 5; 0 = off),
+`FP_MOL` (rank molecule-averaged groups, §25; 0), `FP_SEED` (order/negatives/dropout, not val; 0), `FP_CKPT_MIN` (resumable checkpoint interval, 5; 0 = off),
 `FP_INIT` (asserts same bits/width/defect, so same split), `--epochs`, `--limit`. The log prints `epoch 0 pool-MRR`
 for a fine-tune: it must read **0.5313** for `fpmodel_c1cov3.pt` (0.5073 for `fpmodel.pt` on `splits.npz`), then
 `mol-MRR` (mean over up to 4 spectra per structure, as the eval queries; 0.6025 for `fpmodel_c1cov3.pt`).
@@ -112,7 +118,10 @@ Splits (`split.py`, env `SPLIT_OUT`):
 
 `dilute.py` env knobs: `SPLITS`, `FP_MODEL`, `FRACS=1` (full COCONUT), `GAMMA`, `GATES`+`GAMMA_HI` (default gate 0 =
 no gate; it was 2 = always `GAMMA_HI` until 2026-10-17), `DELTAS`,
-`FORMULA_ORACLE=1`, `TRUE_ADDUCT` (default 1), `SPEC_MASS`, `C2_BANNED=1`. Search: `SIM=cos|rev|hyb`.
+`FORMULA_ORACLE=1`, `TRUE_ADDUCT` (default 1), `SPEC_MASS`, `C2_BANNED=1`, `GAMMAS`/`NORMS` sweeps,
+`PRIOR`+`PRIOR_WS`+`PRIOR_GATES`+`PRIOR_FILL` (§28). Search: `SIM=cos|rev|hyb`. A comma-separated `FP_MODEL` is an
+ensemble (mean probability). Val MRR of any model/ensemble: `data/jobs/val_mrr.py`.
+The merged pool cache is one directory per pool under `data/pool/` (§28); concurrent runs are safe since.
 
 Standard eval (FRACS=1: 1–2 min, 5–6 GB peak; always run with and without `C2_BANNED=1`):
 ```bash

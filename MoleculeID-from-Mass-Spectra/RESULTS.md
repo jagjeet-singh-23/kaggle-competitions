@@ -1005,6 +1005,14 @@ for the next section. The two rounding-only trainings `mac` + `mac_repro` ensemb
 their average (0.4380 against 0.4322 / 0.4385): their predictions differ by 0.011 per bit,
 too correlated to gain.
 
+**Leaderboard: v14 scored 0.254, against v12's 0.252** (same model, same gamma; only the
+prior). +0.002 solves to real class 3 rising ~0.003, a fraction of what the leak-free
+split's +0.06 quality would give even at real class 3's lower coverage. So the held-out
+answers are better documented than the hidden test's: they come from public spectral
+libraries, which hold well-known compounds, and the test's class 3 does not. The prior is
+kept (new best, class 1 held), but the eval overstates it several-fold, and a heavier
+weight is not justified by the eval alone.
+
 ## 29. Seed ensembles: +0.008 val mol-MRR, inside the eval's noise
 
 `FP_SEED` 1-3 of the baseline config (tau 0.05, lambda 1, 2 epochs; ~13 min each) plus
