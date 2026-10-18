@@ -30,7 +30,7 @@ import fingerprint
 import formula
 import prior
 from fpsearch import FP_NORM, load_model, normalise, query_fp, TOP_K
-from metric import mrr
+from metric import mrr, reciprocal_rank
 from search import Searcher, spectra_of
 
 WORK = library.WORK
@@ -94,6 +94,18 @@ PRIOR_WS = tuple(float(x) for x in os.environ.get("PRIOR_WS", "0").split(","))
 # rarely holds (1% on the leak-free split), so the prior can only push them down.
 PRIOR_GATES = tuple(float(x) for x in os.environ.get("PRIOR_GATES", "9").split(","))
 PRIOR_OF = prior.load()
+# DUMP=path.npz writes every molecule's reciprocal rank for every swept config, so a
+# metric can be cut by stratum (e.g. how documented the answer is) after the run.
+DUMP = os.environ.get("DUMP")
+_dump = {}
+# STRATA=1 also prints class 3 MRR by how documented the answer is (COCONUT synonyms).
+# Held-out answers are public-library compounds, better documented than the hidden
+# test's, and anything that favours known structures gains on the documented strata
+# only (RESULTS.md 30). The 0-1 stratum is the closest to the test.
+STRATA = os.environ.get("STRATA") == "1"
+BUCKETS = ((0, 1), (2, 4), (5, 19), (20, None))
+SYN_OF = prior.load("syn") if STRATA else {}
+LAST_STRATA = ""
 
 
 
@@ -201,6 +213,23 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, n
         preds[cls][k] = top[:TOP_K]
     if kept:
         print(f"  oracle keeps a median {np.median(kept):.1%} of candidates", flush=True)
+    if DUMP:
+        tag = f"g{gamma:g}_n{norm or 'raw'}_d{delta:g}_p{pw:g}_pg{pgate:g}"
+        for c in (1, 2, 3):
+            ks = sorted(answers[c])
+            _dump[f"{tag}_c{c}_key"] = np.array(ks)
+            _dump[f"{tag}_c{c}_rr"] = np.array([reciprocal_rank(preds[c].get(k, []), answers[c][k])
+                                                for k in ks])
+        np.savez(DUMP, **_dump)
+    if STRATA:
+        global LAST_STRATA
+        n_syn = {k: round(np.expm1(SYN_OF.get(k, 0.0))) for k in answers[3]}   # load() is log1p
+        cells = []
+        for lo, hi in BUCKETS:
+            rr = [reciprocal_rank(preds[3].get(k, []), a) for k, a in answers[3].items()
+                  if lo <= n_syn[k] and (hi is None or n_syn[k] <= hi)]
+            cells.append(f"{lo}-{hi if hi is not None else ''} {np.mean(rr) if rr else float('nan'):.4f} (n {len(rr)})")
+        LAST_STRATA = "    class 3 by answer synonyms:  " + "   ".join(cells)
     if spread and os.environ.get("SHOW_SPREAD") == "1":
         print(f"  pool tanimoto std: median {np.median(spread):.4f}", flush=True)
     return [mrr(preds[c], answers[c]) for c in (1, 2, 3)], int(np.median(sizes))
@@ -244,6 +273,8 @@ def main():
             lb = sum(MIX[c] * v[i] for i, c in enumerate((1, 2, 3)))
             print(f"{f:>6g}{d:>7g}{med:>8}{cov:>9.1%}{v[0]:>9.4f}{v[1]:>9.4f}"
                   f"{v[2]:>9.4f}{q:>9.3f}{lb:>8.4f}", flush=True)
+            if STRATA:
+                print(LAST_STRATA, flush=True)
         out.append((f, med, cov, v, q))
         if MODE != "ppm":
             del an

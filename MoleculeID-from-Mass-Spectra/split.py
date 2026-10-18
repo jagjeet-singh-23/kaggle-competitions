@@ -43,7 +43,10 @@ C3_COVERED = os.environ.get("C3_COVERED") == "1"
 # at all, and the hidden test is enveda's (RESULTS.md section 15).
 C1_LIB = os.environ.get("C1_LIB", "").encode()
 
-N_PER_CLASS = 200        # held-out structures per novelty class
+# Held-out structures per novelty class: one number for all three, or "n1,n2,n3".
+# 200 each leaves class 3 noise at ~0.025 between identical trainings (RESULTS.md 26).
+N_PER_CLASS = tuple(int(x) for x in os.environ.get("N_PER_CLASS", "200").split(","))
+N1, N2, N3 = N_PER_CLASS * 3 if len(N_PER_CLASS) == 1 else N_PER_CLASS
 MAX_SPECTRA = 4          # queries per molecule; the real test has median 3
 
 
@@ -90,9 +93,9 @@ def build(seed=0):
     if C1_LIB:
         multi_l = np.array([gi for gi in multi if C1_LIB in lib[groups[gi]]])
         print(f"{len(multi_l):,} multi-library structures include {C1_LIB.decode()}")
-        c1 = pick(multi_l, N_PER_CLASS)
+        c1 = pick(multi_l, N1)
     else:
-        c1 = pick(multi, N_PER_CLASS)
+        c1 = pick(multi, N1)
     rest = np.setdiff1d(np.r_[multi, single], c1)
     if C3_COVERED:
         import external
@@ -100,11 +103,11 @@ def build(seed=0):
         covered = rest[np.isin(uniq[rest], ext)]
         print(f"{len(covered):,} of {len(rest):,} candidate structures are in the "
               f"external database")
-        c3 = pick(covered, N_PER_CLASS)
-        c2 = pick(np.setdiff1d(rest, c3), N_PER_CLASS)
+        c3 = pick(covered, N3)
+        c2 = pick(np.setdiff1d(rest, c3), N2)
     else:
-        c23 = pick(rest, 2 * N_PER_CLASS)
-        c2, c3 = c23[:N_PER_CLASS], c23[N_PER_CLASS:]
+        c23 = pick(rest, N2 + N3)
+        c2, c3 = c23[:N2], c23[N2:]
 
     query, qclass, qkey, drop = [], [], [], []
     for cls, sel in ((1, c1), (2, c2), (3, c3)):
