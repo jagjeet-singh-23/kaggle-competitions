@@ -33,7 +33,7 @@ import gzip
 import os
 import sys
 import time
-from multiprocessing import Pool
+import multiprocessing
 
 import numpy as np
 
@@ -45,6 +45,14 @@ SRC = f"{DATA}/pubchem/CID-SMILES.gz"
 OUT = os.environ.get("PUBCHEM_OUT", f"{WORK}/ext_pubchem")
 MZ_LO, MZ_HI = 100.0, 1300.0
 NP_MIN = float(os.environ.get("NP_MIN", -99.0))
+# MIN_SYN selects by popularity instead: only CIDs with at least this many PubChem
+# synonyms (pubchem_meta.py), checked before the SMILES is parsed. Reference standards
+# are documented compounds, and the synonym prior (prior.py) ranks by the same count,
+# so a pool chosen this way spends its rows on what the test can be. 0 = off. The
+# shards then also carry cid / n_syn / n_pmid for the prior.
+MIN_SYN = int(os.environ.get("MIN_SYN", 0))
+_SYN = _PMID = None                       # set in build(), inherited through fork
+FIELDS = ("key", "smiles", "mass", "fp")
 # TARGET picks NP_MIN from a strided sample so the build lands near a row count,
 # rather than making the threshold a guess that is only checked an hour later. The
 # count is a memory budget: about 530 bytes a row, against a 30 GB kernel that also
@@ -79,12 +87,18 @@ def _work(lines):
     """One chunk of `CID<TAB>SMILES` lines -> (keys, smiles, masses, fps, np), n."""
     Chem, Desc, gen = _state["Chem"], _state["Desc"], _state["gen"]
     npscorer, fs = _state["npscorer"], _state["fs"]
-    K, S, M, F, P = [], [], [], [], []
+    K, S, M, F, P, C = [], [], [], [], [], []
     for ln in lines:
         t = ln.rstrip("\n").split("\t")
-        if len(t) != 2:
+        # Current CID-SMILES has no header row; an older one did, so skip any line
+        # whose CID is not a number rather than always dropping the first (CID 1).
+        if len(t) != 2 or not t[0].isdigit():
             continue
         smi = t[1]
+        if MIN_SYN:
+            cid = int(t[0])
+            if cid >= len(_SYN) or _SYN[cid] < MIN_SYN:
+                continue
         # Mixtures and salts are not what one precursor mass describes, and the index
         # holds none. Dropping them here also saves the parse on ~15% of PubChem.
         if "." in smi or not 3 <= len(smi) <= SMILES_MAX:
@@ -95,7 +109,8 @@ def _work(lines):
         mass = Desc.ExactMolWt(m)
         if not MZ_LO <= mass <= MZ_HI:
             continue
-        np_ = npscorer.scoreMol(m, fs)
+        # Scored only when it filters: a popularity build (MIN_SYN) skips its cost.
+        np_ = npscorer.scoreMol(m, fs) if NP_MIN > -99 or not MIN_SYN else 0.0
         if np_ < NP_MIN:
             continue
         try:
@@ -109,11 +124,12 @@ def _work(lines):
         M.append(mass)
         F.append(np.packbits(gen.GetFingerprintAsNumPy(m)))
         P.append(np_)
+        C.append(int(t[0]))
     if not K:
         return None, len(lines)
     return (np.array(K, dtype="S14"), np.array(S, dtype=f"S{SMILES_MAX}"),
             np.array(M, np.float64), np.stack(F),
-            np.array(P, np.float32)), len(lines)
+            np.array(P, np.float32), np.array(C, np.int64)), len(lines)
 
 
 def _chunks(f, n=CHUNK, stride=1):
@@ -134,8 +150,8 @@ def _stream(stride=1, limit=None):
     seen = kept = 0
     t0 = time.time()
     with gzip.open(SRC, "rt") as f:
-        next(f)                                    # header
-        with Pool(NPROC, initializer=_init) as p:
+        # fork, not macOS's default spawn: workers share _SYN instead of loading copies.
+        with multiprocessing.get_context("fork").Pool(NPROC, initializer=_init) as p:
             for res, n in p.imap(_work, _chunks(f, stride=stride), chunksize=1):
                 seen += n
                 if res is not None:
@@ -197,7 +213,12 @@ def pilot(n=2_000_000, stride=53):
 
 
 def build():
-    global NP_MIN
+    global NP_MIN, _SYN, _PMID, FIELDS
+    if MIN_SYN:
+        import pubchem_meta
+        _SYN, _PMID = pubchem_meta.load()   # inherited by the workers through fork
+        FIELDS = FIELDS + ("cid", "n_syn", "n_pmid")
+        print(f"MIN_SYN={MIN_SYN}: {int((_SYN >= MIN_SYN).sum()):,} CIDs qualify", flush=True)
     if TARGET:
         NP_MIN = pick_threshold(TARGET)     # inherited by the workers through fork
     os.makedirs(OUT, exist_ok=True)
@@ -211,10 +232,13 @@ def build():
         if buf:
             np.savez(f"{OUT}/shard_{shard:03d}.npz",
                      **{k: np.concatenate([b[i] for b in buf])
-                        for i, k in enumerate(("key", "smiles", "mass", "fp"))})
+                        for i, k in enumerate(FIELDS)})
 
     for res in _stream(stride=STRIDE):
-        buf.append(res[:4])
+        if MIN_SYN:
+            cid = res[5]
+            res = res[:4] + (cid, _SYN[cid], _PMID[cid])
+        buf.append(res[:len(FIELDS)])
         held += len(res[0])
         n += len(res[0])
         if held >= SHARD:
@@ -238,15 +262,28 @@ def dedupe():
     fs = sorted(glob.glob(f"{OUT}/shard_*.npz"))
     keys = [np.load(f)["key"] for f in fs]
     off = np.cumsum([0] + [len(k) for k in keys])
-    _, first = np.unique(np.concatenate(keys), return_index=True)
+    allk = np.concatenate(keys)
+    _, first, inv = np.unique(allk, return_index=True, return_inverse=True)
+    best = {}
+    if "n_syn" in np.load(fs[0]).files:
+        for c in ("n_syn", "n_pmid"):
+            v = np.concatenate([np.load(f)[c] for f in fs]).astype(np.int64)
+            mx = np.zeros(len(first), np.int64)
+            np.maximum.at(mx, inv, v)
+            best[c] = mx[inv]                 # every row carries its key's maximum
+    del allk
     del keys
     mask = np.zeros(off[-1], bool)
     mask[first] = True
     for i, f in enumerate(fs):
         m = mask[off[i]:off[i + 1]]
-        if not m.all():
+        if not m.all() or best:
             with np.load(f) as d:
                 out = {k: d[k][m] for k in d.files}
+                if "n_syn" in d.files:
+                    # A key14 kept once stands for every CID that collapsed onto it.
+                    for c in ("n_syn", "n_pmid"):
+                        out[c] = best[c][off[i]:off[i + 1]][m]
             np.savez(f, **out)
     print(f"deduped to {int(mask.sum()):,} structures "
           f"({off[-1] - int(mask.sum()):,} removed)")

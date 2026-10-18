@@ -1099,3 +1099,61 @@ ensemble) was submitted expecting a tie (+0.0005).
 **Leaderboard: v15 scored 0.257 against v14's 0.254.** The scaled eval predicted +0.0005; the
 +0.003 is within the LB's ±0.003-0.005 noise, so it shows the ensemble does not hurt, not
 that it is worth 0.003. v15 is the best submission and the one to select.
+
+## 31. A PubChem pool chosen by popularity, and the competition's own class definitions
+
+**The competition's classes are not this repo's.** The Data tab defines class 2 as "no
+public spectra, but the structure is in PubChem or COCONUT" and class 3 as "not in
+PubChem at all", to be predicted de novo. This repo's "class 3" (73.5% of the LB) is
+official class 2 + 3; no database reaches official class 3, and any pool expansion is
+a bet on how much of the hidden official class 2 it holds.
+
+**Pool.** `pubchem_meta.py` streams PubChem's CID-Synonym-filtered and CID-PMID (per-CID
+counts, `data/pubchem_meta/counts.npz`; 62.99M CIDs with a synonym, 17.85M with two or
+more). `MIN_SYN=2 pubchem.py --build` keeps CIDs with two or more synonyms before parsing:
+15.96M structures after dedupe, 8 min on the Mac (`data/ext_pubpop2/`, 8.5 GB;
+`savez_compressed` copy 1.14 GB, verified column for column, uploaded as
+`casmi26-pubchem-pop2`). The shards also carry cid / n_syn / n_pmid (max over the CIDs a
+key14 stands for).
+
+**Ordinary split** (`splits_bigord.npz`: 400/400/1000, class 1 from `enveda-180`,
+class 3 drawn from any structure; models `fpmodel_bigord_rank_s{0,1}.pt`), raw gamma 32,
+`C2_BANNED=1`, ensemble of the two:
+
+| pool | median pool | class 3 coverage | class 1 | class 2 | class 3 | LB column |
+|---|---|---|---|---|---|---|
+| COCONUT | 57 | 7.6% | 0.9292 | 0.0283 | 0.0358 | 0.1600 |
+| + NP-PubChem 8.4M | 201 | 10.8% | 0.9262 | | 0.0393 | 0.1630 |
+| + popularity PubChem 16M | 1203 | 69.4% | 0.9121 | 0.2705 | 0.2734 | 0.3627 |
+| same, COCONUT prior w 0.5 | 1203 | 69.4% | 0.9121 | 0.2759 | 0.2835 | 0.3709 |
+
+Coverage of the 1000 class 3 answers by threshold: 2+ synonyms 68.9%, 3+ 28.9%, 5+ 16.8%,
+10+ 9.1%. The PubChem synonym prior and a PMID prior did less than COCONUT's.
+
+**An adversarial review** (a separate agent, read-only) found the gain is mostly
+`enveda-180`: 698 of the 1000 class 3 answers are its synthetic screening compounds,
+which the Data tab says are "a different region of chemical space from the test
+molecules". A PubChem sample of 40 covered ones were all Enamine deposits whose two
+synonyms are vendor IDs, which is the 2-vs-3 cliff. No leak: banned answers return only
+through pool rows, as intended. Its estimate: LB about -0.01 (-0.03..+0.02).
+
+**Read on the answers that are not `enveda-180`** (public-library compounds, natural-
+product-like) and on the COCONUT-covered split (`splits_big.npz`, dilution of what scores
+today), with the COCONUT prior at gate 0.8 and the weight swept (v15 = COCONUT alone, w 0.5):
+
+| | covered split class 3 | non-env class 3 (302) | its COCONUT-covered (76) | its uncovered (226) | class 1 |
+|---|---|---|---|---|---|
+| v15 | 0.482 | 0.135 | 0.510 | 0.009 | 0.927 |
+| pop2, w 0.5 | 0.404 | 0.257 | 0.452 | 0.192 | 0.912 |
+| **pop2, w 1** | **0.459** | **0.261** | **0.500** | **0.180** | 0.911 |
+| pop2, w 2 | 0.461 | 0.247 | 0.521 | 0.154 | 0.889 |
+| pop2, w 4 | 0.426 | 0.195 | 0.469 | 0.103 | 0.689 |
+
+At w 1 the prior, which favours COCONUT entries, holds the answers that score today to
+-5% of COCONUT alone, and the non-`enveda-180` answers COCONUT lacks go 0.009 -> 0.18.
+The fixed cost on the LB is then ~-0.004 (dilution 0.735 x 0.056 x 0.046, class 1
+0.14 x 0.015). The gain is 0.735 x d x g, d the share of the hidden non-library
+molecules that are official class 2 outside COCONUT, g their MRR gain; break-even at
+d x g ~ 0.0055 (d = 0.2 needs g = 0.03, a sixth of the held-out proxy's). The held-out g
+comes from documented public-library compounds and the hidden ones may be less
+documented, so it is an upper bound. Shipped as v16 (v15 + this pool + prior w 1).

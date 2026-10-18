@@ -25,7 +25,7 @@ FILL = float(os.environ.get("PRIOR_FILL", 0))
 # cosine per spectrum) reaches it, i.e. class 1, where the prior only costs (RESULTS.md 28).
 W = float(os.environ.get("PRIOR_W", 0))
 GATE = float(os.environ.get("PRIOR_GATE", 9))
-COUNTS = {"syn": "n_syn", "org": "n_org", "coll": "n_coll", "doi": "n_doi"}
+COUNTS = {"syn": "n_syn", "org": "n_org", "coll": "n_coll", "doi": "n_doi", "pmid": "n_pmid"}
 FLAGS = {"cas": "has_cas", "name": "has_name", "annot": "annot", "npl": "npl"}
 
 
