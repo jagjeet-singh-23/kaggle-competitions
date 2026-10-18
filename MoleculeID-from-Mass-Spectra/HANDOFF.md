@@ -1,4 +1,4 @@
-# Handoff — CASMI 2026 (as of 2026-10-17)
+# Handoff — CASMI 2026 (as of 2026-10-18)
 
 Read RESULTS.md §11–29 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
@@ -29,6 +29,9 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 | ver | change | LB |
 |---|---|---|
+| v1 | library search only | 0.140 |
+| v2 | + analog propagation, fingerprint scoring | 0.158 |
+| v3 | + COCONUT candidate pool | 0.199 |
 | v4 | mass-defect features, hidden 2048 | 0.213 |
 | ChEMBL pool | bigger candidate pool | 0.187 (pool expansion closed) |
 | v9 | adduct-window bug fix | 0.236 |
@@ -37,6 +40,51 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v12 | fpmodel + in-pool ranking loss (§21–22), gamma 32, no gate | **0.252** |
 | v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
 | v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | **0.254** |
+
+## Read first: what looks like a fact but is not
+
+Every item here was discovered the hard way, some of them twice. Do not re-derive them.
+
+**The three different "tests"**
+
+1. **Local `data/test.parquet` is a placeholder.** All 400 molecules have an identical twin (same precursor, peaks,
+   intensities) in the train library `enveda-180`; scored against its answers the submission gets **0.9975** (§1).
+   Use it only to check that `submit()` runs. Never infer hidden-test properties from it: adduct mix, mass range, how
+   many spectra per molecule, match strength, how many lists a change touches. A gated-gamma change looked like a
+   no-op on it (1 of 400 lists changed) only because every molecule has a cosine-1.0 twin; that says nothing about how
+   many hidden lists a change touches. `GUIDE.md` is Hinglish and predates every result: its numbers about "the test"
+   describe this placeholder, and its modelling plan is background, not the plan. What it quotes from the competition
+   page (10 test adducts, 25 candidates, metric, tautomer canonicalisation) is fine.
+2. **Kaggle scores a different file.** It is a kernels-only competition with internet off: submitting re-runs the
+   kernel on the hidden test (~66 min kernel, ~70 min scoring). A kernel that finishes only proves it ran. The only
+   evidence of quality is the public LB; the private score is not revealed until 14 Dec 2026.
+3. **Held-out classes are not the hidden classes.**
+
+| | held-out `splits.npz` | covered splits (`cov3`, `c1cov3`) | hidden test |
+|---|---|---|---|
+| class 1 | structures in 2+ libraries; never holds out `enveda-180` | `c1env`, `c1cov3`: from `enveda-180` | Enveda data; 14.0% of the score |
+| class 2 | answer is in the index's own structures, so reachable | same | 12.6% of the score; partly reachable: the truth sits between the plain and the `C2_BANNED=1` eval (§16) |
+| class 3 | 8% in COCONUT (16 of 200): its MRR is noise | 100% in COCONUT by construction: "quality" = ranking among candidates in the pool | 73.5% of the score; mostly unreachable; real class 3 MRR was ~0.061 at v3/v4 |
+
+- The class mix is exact: v1 and v2 have no class 3 capability, so the two LB scores pin it at 14.0 / 12.6 / 73.5 (§7–8).
+- Real class 3 coverage by COCONUT is ~12%: §9 got 12.4% from real MRR 0.061 over a ranking quality of 0.492. That
+  quality came from the leaky `fpmodel.pt`, and a leak-free one is lower, so the true figure is probably somewhat higher.
+  Do not quote 12.4% as exact.
+- A held-out delta therefore reaches the LB roughly as
+  `0.140·Δclass1(Enveda split) + 0.126·Δclass2(C2_BANNED=1) + 0.735·coverage·Δquality(covered split)`, and the eval
+  overstates every term (see the section below). Predicted absolute levels are not calibrated; use deltas only.
+
+**Conclusions in RESULTS.md that later sections overturned**
+
+- §8 and §11 (early): "model work only touches class 1 and 2, class 3 is coverage-limited". The end of §11 already says
+  the real lever is ranking against isomers of the same mass, and v12 confirmed it (+0.016). Which class paid for v12 is
+  not known.
+- §8 and §9 class 3 quality 0.492, and every covered-split class 2/3 number before §17, used the leaky `fpmodel.pt`.
+- §9 reasoned that widening the mass window to 160 ppm mimics a bigger database. §10 showed that wrong: candidates in
+  the 5 ppm window are isomers, the confusable kind.
+- Pool expansion is closed. ChEMBL scored 0.187 against COCONUT's 0.213, PubChem was worse (§10–11): coverage
+  elasticity +0.50, ranking-quality elasticity −0.86 against pool size. Do not add candidates.
+- §17–23 numbers are at gamma 128, not the gamma they name (see "Where we stand"). §24 re-measures at gamma 32.
 
 ## What has been tried and closed
 
@@ -67,7 +115,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 - **Rule before any submission:** a change must improve the `C2_BANNED=1` eval, or class 1 / class 3, not just ordinary
   class 2, and class 1 must not fall. Absolute predicted LB is not calibrated (0.145–0.188 vs 0.236); use deltas only.
 - Class 3 quality needs a **covered** split and a **leak-free** model: `splits_c1cov3.npz` + `fpmodel_c1cov3.pt`
-  (baseline 0.397; leaky model on the same split said 0.557). Class 3 of `splits.npz` is 16 covered molecules: noise.
+  (BCE baseline 0.397 and leaky 0.557 at gamma 128, §17; the §21 ranking baseline is 0.407 at the shipped gamma 32, §26). Class 3 of `splits.npz` is 16 covered molecules: noise.
 - **Retraining the same config moves 200-molecule class 3 by up to 0.025 and its LB by up to 0.019** (float rounding
   alone, §26); val pool-MRR / mol-MRR moves 0.001. Judge model changes on val MRR; class 3 under ~0.025 is noise.
 - The v12 estimate from held-out deltas was +0.006..+0.011; the real gain was +0.016. `C2_BANNED=1` delta (+0.021)
@@ -164,3 +212,28 @@ Linux laptop (15.6 GB, swap nearly full):
 - `rg` sometimes resolves to grep in this shell: use `/usr/bin/rg`.
 - Never `git add -A`; stage by path. Competition data is never committed. Pushing needs the personal gh account:
   `gh auth switch --user jagjeet-singh-23`, push, `gh auth switch --user jagjeet-singh-ambak`.
+
+## Shell and harness traps
+
+- `pkill -f <pattern>` kills the calling shell (exit 144) when the pattern also appears in the command line that runs
+  it. It happened three times. Find the PID with `pgrep -af` and `kill <pid>`.
+- `ps -e` returned nothing on the Linux box on 2026-09-28 (a shell wrapper swallowed it) and worked on 2026-10-13. That
+  broke an "is the old job still running?" check and three duplicate downloaders were started. Use `pgrep -af <pat>`,
+  and `fuser <file>` to name every writer of a file.
+- zsh aborts the whole command line on an unmatched glob (`ls data/eval_*` before the files exist).
+- `;` does not stop a chain when a step fails: a killed run was followed by the next run starting on top of it.
+- `!` commands in Claude Code have no TTY, so `sudo` fails there. Run sudo in a real terminal. Never hand a sudo password
+  to the assistant.
+- Claude Code reaps background shells when the machine is low on memory ("stopped because the system is running low on
+  memory"). That says nothing about the command. Do not restart it unprompted.
+- `tail -n 1 a b` (not `tail -1`) when given two files. `sleep` in a chained command is blocked by the harness: wait with
+  `until <check>; do sleep 15; done` in a background command.
+- Linux box: the shell prints a zoxide warning before every command's output. Harmless.
+
+## Working agreements
+
+- Commit and push only when asked, staged by path. Confirm before a Kaggle submission unless the user has said to go ahead.
+- Never weaken `guard.sh` after a kill; free memory or shrink the job. Never kill a process the assistant did not start
+  without being told which one.
+- Before formatting or wiping anything, name the device and confirm it is the removable one.
+- The user writes in Hinglish.
