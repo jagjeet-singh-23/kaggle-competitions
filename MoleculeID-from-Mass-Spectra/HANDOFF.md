@@ -56,6 +56,12 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 
 ## What the eval can and cannot tell you (§15–16, §17, §21)
 
+- **The held-out eval overstates every gain several-fold, in every run so far** (v4 class 3, gamma 64, v12 +0.006..0.011
+  predicted vs +0.016 real is the only exception, v13 predicted + and lost, v14 predicted ~+0.04 and got +0.002). Held-out
+  answers are structures with public library spectra: well-known, well-documented compounds. The hidden test's class 3 is
+  not, so anything that favours "known" structures (priors, the index's own structures, sharper isomer separation tuned on
+  them) looks far better held-out than it is. **Read an eval gain as a direction at most; only the LB sizes it.** Never
+  raise a weight because the eval likes it more.
 - The held-out eval over-rewards scoring-weight changes: the gain is **class 2 whose answer sits in the index's own
   structures**, which does not reach the LB. With class 2 answers banned (`C2_BANNED=1`) gamma variants tie, like the LB.
 - **Rule before any submission:** a change must improve the `C2_BANNED=1` eval, or class 1 / class 3, not just ordinary
