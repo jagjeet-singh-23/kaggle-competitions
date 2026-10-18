@@ -1004,3 +1004,31 @@ time or against a training run that had already loaded its pool; their numbers r
 for the next section. The two rounding-only trainings `mac` + `mac_repro` ensembled score
 their average (0.4380 against 0.4322 / 0.4385): their predictions differ by 0.011 per bit,
 too correlated to gain.
+
+## 29. Seed ensembles: +0.008 val mol-MRR, inside the eval's noise
+
+`FP_SEED` 1-3 of the baseline config (tau 0.05, lambda 1, 2 epochs; ~13 min each) plus
+the seed-0 run, on the leak-free split. Val from `data/jobs/val_mrr.py` (train()'s val
+structures); eval raw gamma 32, `C2_BANNED=1`, without / with the §28 prior (w 0.5, gate 0.8):
+
+| model | val pool-MRR | val mol-MRR | LB | LB + prior (class 3) |
+|---|---|---|---|---|
+| mac (seed 0) | 0.6294 | 0.7153 | 0.4322 | 0.4762 (0.467) |
+| s1 | 0.6306 | 0.7129 | 0.4388 | 0.4738 (0.464) |
+| s2 | 0.6251 | 0.7125 | 0.4335 | 0.4718 (0.462) |
+| s3 | 0.6309 | 0.7088 | 0.4341 | 0.4735 (0.462) |
+| **ensemble of 4** | **0.6378** | **0.7208** | 0.4389 | **0.4796** (0.471) |
+
+The same for shipping, v12's `fpmodel_rank.pt` plus `fpmodel_rank_s{1,2,3}.pt` (fine-tunes
+of `fpmodel.pt` on `splits.npz`, epoch 0 0.5073 each), on `splits.npz`:
+
+| model | val pool / mol-MRR | class 1 | `C2_BANNED=1` LB | + prior: class 1 | + prior: LB |
+|---|---|---|---|---|---|
+| v12 | 0.6505 / 0.6930 | 0.9215 | 0.1709 | 0.9186 | 0.1713 |
+| ensemble of 4 | 0.6634 / 0.7032 | 0.9211 | 0.1676 | 0.9200 | 0.1704 |
+
+Val moves +0.008-0.013 against a ±0.001 noise, both splits, so the ensemble predicts better.
+The evals move +0.004-0.006 on the leak-free split and -0.001-0.003 on `splits.npz`, all
+inside §26's noise, the latter from 16 class 3 molecules. Members fine-tuned from one init
+are correlated; the gain is a variance cut, not a new signal. Candidate for v15 (v14 plus
+the ensemble), to submit only after v14's score is in so each change is measured alone.
