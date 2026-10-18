@@ -941,7 +941,7 @@ removing the two `os.environ` lines and shipping `data/fpmodel_rank.pt` again.
 Isomers inside the 5 ppm window are what retrieval loses to (§10-11), and the spectrum
 separates them badly. Molecules that get measured as reference standards are the
 documented ones, and COCONUT records documentation per entry. The October 2026 release CSV
-(CC0, `coconut_csv-10-2026.zip`, 739k rows) is reduced by `data/jobs/coconut_meta.py` to one
+(CC0, `coconut_csv-10-2026.zip`, 739k rows) is reduced by `coconut_meta.py` to one
 row per InChIKey14 (`data/coconut_meta/meta.npz`, 480k keys): counts of synonyms,
 organisms, collections and DOIs, CAS and name flags, annotation level, NP-likeness.
 `prior.py` loads one feature (`PRIOR`), counts as log1p; `dilute.py` adds `w * prior` to

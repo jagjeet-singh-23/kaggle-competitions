@@ -6,7 +6,7 @@ that end up measured as reference standards are the documented ones: many synony
 a CAS number, literature. COCONUT (CC0) records that per entry, so a candidate's
 documentation is a feature the spectrum does not carry.
 
-data/coconut_meta/meta.npz is built by data/jobs/coconut_meta.py from the COCONUT
+data/coconut_meta/meta.npz is built by coconut_meta.py from the COCONUT
 release CSV: one row per InChIKey14, counts of synonyms / organisms / collections /
 DOIs, CAS and name flags, annotation level and NP-likeness.
 """
