@@ -143,15 +143,17 @@ ranking work alone rarely shows on the LB. Coverage multiplies every gain, which
    - **Result: v16 scored 0.243 vs v15's 0.257 (-0.014), 3.5x the predicted worst case.** Dilution of the
      covered hidden answers back-solves to ~6x what `splits_big.npz` measured (§31). Closed; do not give another
      expansion an LB slot on held-out evidence.
-2. **Find out why v13 lost.** Every eval term said v13's config was better, and it scored −0.007 (~3 SE). That is the
-   biggest known hole in the eval; any large model change can fail the same way. Cheap test: submit its two halves
-   separately (std norm alone, tau 0.0125 model alone). Two slots, but each prediction is inside the noise, so it may
-   not resolve anything.
+2. **(Closed 2026-10-18) Find out why v13 lost.** Every eval term said v13's config was better, and it scored −0.007.
+   It cannot be diagnosed offline: the local test is the placeholder (Read first, 1), and the kernel logs we get are
+   from that run, not the hidden one. Submitting the halves would only say which half cost the public LB, and
+   neither half is near the shipped config (tau 0.0125 at raw 32 also lost on the leak-free split, 0.418 vs 0.432).
+   The lesson stands: a large model or scoring change can win every eval term and still lose.
 3. **Contrastive spectrum/molecule model, or test-like augmentation** (230-peak Enveda spectra). Big work, and it only
    touches class 3 ranking, which the LB discounts by 0.12. Do it after 1, when coverage makes ranking worth more.
 
 ## What has been tried and closed
 
+- Why v13 (std norm + tau 0.0125) lost: not diagnosable offline; see Next steps 2.
 - Pool expansion (PubChem, ChEMBL): dilution beats coverage (§10–11). Re-tried with a popularity-chosen PubChem
   pool and the prior (v16, §31): 0.243 vs 0.257. Held-out splits underprice the hidden test's dilution ~2.5-6x.
 - Formula oracle ceiling ≈ +0.02; formula-consistency term captures ~5% of it (AUC 0.6) (§12).
