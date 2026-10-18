@@ -12,8 +12,8 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
 - Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v16 (0.243)**, the failed PubChem
-  popularity pool (§31). **`kernel/casmi_submit.py` and `kernel/kernel-metadata.json` are at v16: before the next
-  push, set `PRIOR_W` back to 0.5 and drop `casmi26-pubchem-pop2` from `dataset_sources`.** v15 (0.257, best) is
+  popularity pool (§31). `kernel/casmi_submit.py` and `kernel/kernel-metadata.json` are back at v15's config
+  (`PRIOR_W` 0.5, no `casmi26-pubchem-pop2`). v15 (0.257, best) is
   v14 plus a 4-seed ensemble (§29). `kernel/code/` (git-ignored) holds v15's files: the repo's code, `fpmodel.pt` =
   `data/fpmodel_rank.pt` (v12's model), `fpmodel_s{1,2,3}.pt` = `data/fpmodel_rank_s{1,2,3}.pt`, `coconut_meta.npz` =
   `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env and the comma-separated

@@ -74,7 +74,7 @@ sys.path.insert(0, CODE)
 # library match reaches cosine 0.8 (RESULTS.md section 28). The normalised term of v13
 # scored 0.245 against v12's 0.252 and is not used. prior reads these at import.
 os.environ["PRIOR"] = "syn"
-os.environ["PRIOR_W"] = "1"      # v16: 0.5 -> 1 with the PubChem pool (RESULTS.md section 31)
+os.environ["PRIOR_W"] = "0.5"
 os.environ["PRIOR_GATE"] = "0.8"
 os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
 
@@ -92,14 +92,8 @@ import fpsearch           # noqa: E402
 fingerprint.MODEL = ",".join(f"{CODE}/{m}" for m in
                              ("fpmodel.pt", "fpmodel_s1.pt", "fpmodel_s2.pt", "fpmodel_s3.pt"))
 
-# v16: COCONUT plus PubChem compounds with at least two synonyms (16M, `MIN_SYN=2
-# pubchem.py --build`, dataset casmi26-pubchem-pop2), picked by popularity rather than
-# by NP-likeness. On the ordinary held-out split it lifts class 3 coverage 7.6% -> 69%
-# (mostly enveda-180 screening compounds; on the natural-product-like answers class 3
-# goes 0.135 -> 0.261), and the prior at weight 1 keeps the COCONUT-covered answers
-# within 0.01 of COCONUT alone (RESULTS.md section 31). The text
-# below is why expansions failed before; this one is the test of whether choosing
-# rows by documentation, plus the ranking-loss model and the prior, changes that.
+# v16 added a 16M PubChem pool chosen by synonym count, with this prior at weight 1, and
+# scored 0.243 against v15's 0.257 (RESULTS.md section 31); this file is back at v15.
 #
 # COCONUT (CC0) as the candidate source, and only COCONUT. Class 3 is 73.5% of the
 # hidden test -- solved from four leaderboard points -- and scores 0 without an
@@ -118,7 +112,7 @@ fingerprint.MODEL = ",".join(f"{CODE}/{m}" for m in
 # needs, and no general database is like that.
 #
 # Rules section 2.6 permits external data that is publicly available, free and equally
-# accessible; COCONUT is CC0 and PubChem is public domain.
+# accessible; COCONUT is CC0.
 import external          # noqa: E402
 # Both pool datasets, colon-joined; external.merge deduplicates across them.
 external.OUT = ":".join(find_all("shard_000.npz"))
