@@ -58,13 +58,36 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
 2. **Kaggle scores a different file.** It is a kernels-only competition with internet off: submitting re-runs the
    kernel on the hidden test (~66 min kernel, ~70 min scoring). A kernel that finishes only proves it ran. The only
    evidence of quality is the public LB; the private score is not revealed until 14 Dec 2026.
-3. **Held-out classes are not the hidden classes.**
+3. **Held-out classes are not the hidden classes, and this repo's class names are not the competition's.**
+
+The competition's own definitions (Kaggle Data tab, read 2026-10-18):
+
+| official class | definition | reachable by |
+|---|---|---|
+| 1 — in public spectral libraries | the structure has public reference MS/MS spectra | similarity to the training spectra |
+| 2 — known structure, no public spectra | not in any public library, but **in PubChem or COCONUT** | database retrieval |
+| 3 — novel structure | **not in PubChem at all** | de novo only |
+
+The hidden class mix is not published. The test molecules are "confirmed natural products, hypothesised natural
+products, natural product analogs, and synthetic molecules that might plausibly occur in nature", all on the same Bruker
+timsTOF as `enveda-180`. The Data tab describes `enveda-180` as "synthetic drug-like screening compounds, a different
+region of chemical space from the test molecules". `enveda-np-examples` (250 common natural products, same instruments
+and pipeline as the test) is the closest library to it.
+
+**Everywhere else in this repo, "class 3" means "not found by library search", i.e. official class 2 + official class 3
+together**, and "class 2" is the held-out class whose answer is one of the index's own structures. The 14.0 / 12.6 / 73.5
+mix (§7–8) is in those terms. Consequences:
+- No database can reach official class 3. What any pool expansion can win is official class 2, all of which is in
+  PubChem ∪ COCONUT by definition. The question for a pool is how much of the hidden official class 2 a given subset holds.
+- COCONUT's ~12% "class 3 coverage" and v3's +0.041 came from official class 2 molecules in COCONUT.
+- Held-out class 3 drawn uniformly from the index is ~70% `enveda-180` (698 of 1000 in `splits_bigord.npz`): synthetic
+  screening compounds, unlike the test. Read held-out class 3 on its non-`enveda-180` answers (§31).
 
 | | held-out `splits.npz` | covered splits (`cov3`, `c1cov3`) | hidden test |
 |---|---|---|---|
 | class 1 | structures in 2+ libraries; never holds out `enveda-180` | `c1env`, `c1cov3`: from `enveda-180` | Enveda data; 14.0% of the score |
 | class 2 | answer is in the index's own structures, so reachable | same | 12.6% of the score; partly reachable: the truth sits between the plain and the `C2_BANNED=1` eval (§16) |
-| class 3 | 8% in COCONUT (16 of 200): its MRR is noise | 100% in COCONUT by construction: "quality" = ranking among candidates in the pool | 73.5% of the score; mostly unreachable; real class 3 MRR was ~0.061 at v3/v4 |
+| class 3 | 8% in COCONUT (16 of 200): its MRR is noise | 100% in COCONUT by construction: "quality" = ranking among candidates in the pool | 73.5% of the score = official class 2 + 3; mostly unreachable; real class 3 MRR was ~0.061 at v3/v4 |
 
 - The class mix is exact: v1 and v2 have no class 3 capability, so the two LB scores pin it at 14.0 / 12.6 / 73.5 (§7–8).
 - Real class 3 coverage by COCONUT is ~12%: §9 got 12.4% from real MRR 0.061 over a ranking quality of 0.492. That
@@ -105,6 +128,15 @@ ranking work alone rarely shows on the LB. Coverage multiplies every gain, which
      reads (`coconut_meta.py` is the template), or merge it with COCONUT's.
    - Risk: if the hidden class 3 answers are poorly documented, the prior hurts them (§30, 0–1 synonym stratum −0.05).
      A gain here would be large, though, so it will not hide in the LB's noise.
+   - **Status 2026-10-18:** a popularity pool is built: `MIN_SYN=2 pubchem.py --build` -> `data/ext_pubpop2/` (15.96M,
+     8.5 GB; compressed copy `data/ext_pubpop2_z/` 1.14 GB, uploaded as private dataset `casmi26-pubchem-pop2`).
+     Per-CID counts: `pubchem_meta.py` -> `data/pubchem_meta/counts.npz`; `data/pubchem/CID-SMILES.gz` is on disk.
+     On `splits_bigord.npz` (ordinary, 400/400/1000) it lifted class 3 coverage 7.6% -> 69% and class 3 0.036 -> 0.284
+     (COCONUT prior w 0.5 gate 0.8; class 1 −0.017). **An adversarial review found most of that is `enveda-180`
+     screening compounds** (Enamine deposits whose two PubChem synonyms are vendor IDs), which the test is not; no leak.
+     Its estimate for the LB: about −0.01 (−0.03..+0.02). Pending before any v16: class 3 on the non-`enveda-180`
+     answers, and the dilution of the COCONUT-covered answers on `splits_big.npz`. Kernel v16 files are prepared,
+     not pushed.
 2. **Find out why v13 lost.** Every eval term said v13's config was better, and it scored −0.007 (~3 SE). That is the
    biggest known hole in the eval; any large model change can fail the same way. Cheap test: submit its two halves
    separately (std norm alone, tau 0.0125 model alone). Two slots, but each prediction is inside the noise, so it may
