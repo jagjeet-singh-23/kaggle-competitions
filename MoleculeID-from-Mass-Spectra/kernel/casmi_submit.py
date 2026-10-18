@@ -87,7 +87,10 @@ import fpsearch           # noqa: E402
 # takes 57 minutes on 1.88M spectra and would nearly double a kernel that already
 # spends an hour rebuilding the index. The shipped model excluded the 3,060 held-out
 # spectra used for local scoring, which is 0.16% of the training data.
-fingerprint.MODEL = f"{CODE}/fpmodel.pt"
+# v15: v12's model plus three more seeds of its config, averaged (RESULTS.md section 29:
+# val mol-MRR +0.010). A comma-separated MODEL is an ensemble (fpsearch.load_model).
+fingerprint.MODEL = ",".join(f"{CODE}/{m}" for m in
+                             ("fpmodel.pt", "fpmodel_s1.pt", "fpmodel_s2.pt", "fpmodel_s3.pt"))
 
 # COCONUT (CC0) as the candidate source, and only COCONUT. Class 3 is 73.5% of the
 # hidden test -- solved from four leaderboard points -- and scores 0 without an
@@ -129,7 +132,8 @@ step("fingerprints and exact masses built")
 fpsearch.submit("/kaggle/working/submission.csv")
 import prior                             # noqa: E402
 step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'}, "
-     f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g})")
+     f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g}, "
+     f"{len(fingerprint.MODEL.split(','))} fingerprint models)")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")
