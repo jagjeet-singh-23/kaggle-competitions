@@ -87,6 +87,31 @@ Every item here was discovered the hard way, some of them twice. Do not re-deriv
   elasticity +0.50, ranking-quality elasticity −0.86 against pool size. Do not add candidates.
 - §17–23 numbers are at gamma 128, not the gamma they name (see "Where we stand"). §24 re-measures at gamma 32.
 
+## Next steps (picked 2026-10-18, after v15)
+
+A change is worth an LB slot only if its coverage-scaled prediction is >= +0.005 (see "What the eval can and cannot
+tell you"). With class 3 coverage ~0.12, a class 3 ranking change needs **+0.057 covered quality** to get there, so
+ranking work alone rarely shows on the LB. Coverage multiplies every gain, which makes it the lever again.
+
+1. **(Picked) Re-open pool expansion, now with a popularity prior.** §10–11 closed PubChem / ChEMBL because isomer
+   crowding cut ranking quality (pool x4.6, quality x0.27), but that was before the prior (§28). The classic CASMI
+   recipe is PubChem plus a popularity prior: obscure decoys in a crowded window get pushed down.
+   - Measure on an **ordinary** (not covered) big split, class 3 1000: its class 3 MRR captures coverage and quality
+     together, like the LB. Compare COCONUT vs COCONUT + PubChem, both with the prior.
+   - Needs from the Linux box: `data/ext_pubchem/` (NP-filtered PubChem shards, ~8.4M rows, `pubchem.py --build`) and
+     `data/ext_chembl/`. The shards hold key/smiles/mass/fp only, no metadata.
+   - Popularity for PubChem: synonym counts from PubChem FTP (`Compound/Extras/CID-Synonym-filtered.gz`) joined through
+     `CID-InChI-Key.gz` to key14. Public domain, like the shards. Build a `meta.npz` in the same format `prior.py`
+     reads (`coconut_meta.py` is the template), or merge it with COCONUT's.
+   - Risk: if the hidden class 3 answers are poorly documented, the prior hurts them (§30, 0–1 synonym stratum −0.05).
+     A gain here would be large, though, so it will not hide in the LB's noise.
+2. **Find out why v13 lost.** Every eval term said v13's config was better, and it scored −0.007 (~3 SE). That is the
+   biggest known hole in the eval; any large model change can fail the same way. Cheap test: submit its two halves
+   separately (std norm alone, tau 0.0125 model alone). Two slots, but each prediction is inside the noise, so it may
+   not resolve anything.
+3. **Contrastive spectrum/molecule model, or test-like augmentation** (230-peak Enveda spectra). Big work, and it only
+   touches class 3 ranking, which the LB discounts by 0.12. Do it after 1, when coverage makes ranking worth more.
+
 ## What has been tried and closed
 
 - Pool expansion (PubChem, ChEMBL): dilution beats coverage (§10–11).
