@@ -1157,3 +1157,19 @@ molecules that are official class 2 outside COCONUT, g their MRR gain; break-eve
 d x g ~ 0.0055 (d = 0.2 needs g = 0.03, a sixth of the held-out proxy's). The held-out g
 comes from documented public-library compounds and the hidden ones may be less
 documented, so it is an upper bound. Shipped as v16 (v15 + this pool + prior w 1).
+
+**LB: v16 scored 0.243, against v15's 0.257 (-0.014).** That is outside the LB's noise
+and 3.5x the fixed cost predicted above, so the gain term was near zero and the dilution
+was far worse than either split measured. Back-solved with g = 0 and class 1 at
+0.14 x -0.016: the COCONUT-covered hidden answers lost ~29% of their quality
+(0.012 / (0.735 x 0.056)), against 4.6% on `splits_big.npz`. That is ~6x, where ChEMBL
+showed ~2.5x (§11: 0.16 per doubling against the split's 0.065). Either the hidden official
+class 2 is small or pop2 does not hold it; either way its 16M rows are decoys for the
+hidden test. The prior did not save it: it favours COCONUT entries, but the decoys
+sitting near the answer in fingerprint space still outrank it.
+
+This is the third pool expansion that won on held-out and lost on the LB (ChEMBL, NP-
+PubChem, pop2). The held-out splits cannot price dilution for the hidden test, because
+their class 3 answers come from the same libraries the pools are drawn from. **Pool
+expansion is closed again**, and a new one should not get an LB slot on held-out
+evidence. v15 stays the final selection.

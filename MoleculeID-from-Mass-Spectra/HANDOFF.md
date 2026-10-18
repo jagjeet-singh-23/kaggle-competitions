@@ -11,8 +11,10 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002;
   the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v15 (0.257, best)**: v14 plus a 4-seed
-  ensemble (§29). `kernel/code/` (git-ignored) holds v15: the repo's code, `fpmodel.pt` =
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v16 (0.243)**, the failed PubChem
+  popularity pool (§31). **`kernel/casmi_submit.py` and `kernel/kernel-metadata.json` are at v16: before the next
+  push, set `PRIOR_W` back to 0.5 and drop `casmi26-pubchem-pop2` from `dataset_sources`.** v15 (0.257, best) is
+  v14 plus a 4-seed ensemble (§29). `kernel/code/` (git-ignored) holds v15's files: the repo's code, `fpmodel.pt` =
   `data/fpmodel_rank.pt` (v12's model), `fpmodel_s{1,2,3}.pt` = `data/fpmodel_rank_s{1,2,3}.pt`, `coconut_meta.npz` =
   `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env and the comma-separated
   `fingerprint.MODEL`. v15 was expected to tie v14 (scaled eval +0.0005) and scored +0.003, inside the LB's noise:
@@ -40,6 +42,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
 | v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | 0.254 |
 | v15 | v14 + 4-seed fingerprint ensemble (§29) | **0.257** |
+| v16 | v15 + PubChem 2+ synonym pool (16M), prior w 1 (§31) | 0.243 (pool expansion closed again) |
 
 ## Read first: what looks like a fact but is not
 
@@ -137,6 +140,9 @@ ranking work alone rarely shows on the LB. Coverage multiplies every gain, which
      Its estimate for the LB: about −0.01 (−0.03..+0.02). Pending before any v16: class 3 on the non-`enveda-180`
      answers, and the dilution of the COCONUT-covered answers on `splits_big.npz`. Kernel v16 files are prepared,
      not pushed.
+   - **Result: v16 scored 0.243 vs v15's 0.257 (-0.014), 3.5x the predicted worst case.** Dilution of the
+     covered hidden answers back-solves to ~6x what `splits_big.npz` measured (§31). Closed; do not give another
+     expansion an LB slot on held-out evidence.
 2. **Find out why v13 lost.** Every eval term said v13's config was better, and it scored −0.007 (~3 SE). That is the
    biggest known hole in the eval; any large model change can fail the same way. Cheap test: submit its two halves
    separately (std norm alone, tau 0.0125 model alone). Two slots, but each prediction is inside the noise, so it may
@@ -146,7 +152,8 @@ ranking work alone rarely shows on the LB. Coverage multiplies every gain, which
 
 ## What has been tried and closed
 
-- Pool expansion (PubChem, ChEMBL): dilution beats coverage (§10–11).
+- Pool expansion (PubChem, ChEMBL): dilution beats coverage (§10–11). Re-tried with a popularity-chosen PubChem
+  pool and the prior (v16, §31): 0.243 vs 0.257. Held-out splits underprice the hidden test's dilution ~2.5-6x.
 - Formula oracle ceiling ≈ +0.02; formula-consistency term captures ~5% of it (AUC 0.6) (§12).
 - Reverse / hybrid cosine (`SIM=rev|hyb`): loses on held-out (§12).
 - `SPEC_MASS` filter: no effect.
