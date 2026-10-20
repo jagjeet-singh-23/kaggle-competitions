@@ -98,7 +98,7 @@ def export_onnx(model, path):
     """mel [B, 1, 256, 512] -> prob [B, 234], batch dimension dynamic."""
     x = torch.zeros(2, 1, N_MELS, 512)
     torch.onnx.export(_Prob(model).eval(), (x,), path, input_names=["mel"], output_names=["prob"],
-                      dynamic_shapes={"mel": {0: torch.export.Dim("batch")}})
+                      dynamic_shapes={"mel": {0: torch.export.Dim("batch")}}, external_data=False)
 
 
 def selftest():
@@ -139,6 +139,9 @@ def selftest():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "sed.onnx")
         export_onnx(model, path)
+        # One self-contained file: a separate .onnx.data weights file is easy to
+        # leave behind when uploading the model to Kaggle.
+        assert os.listdir(d) == ["sed.onnx"], os.listdir(d)
         sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
         got = sess.run(["prob"], {"mel": x.numpy()})[0]
     diff = np.abs(got - torch.sigmoid(clip).numpy()).max()
