@@ -24,11 +24,13 @@ import sys
 
 import numpy as np
 
+import analog
 import library
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
 import formula
 import prior
+import shifted
 from fpsearch import FP_NORM, load_model, normalise, query_fp, TOP_K
 from metric import mrr, reciprocal_rank
 from search import Searcher, spectra_of
@@ -106,6 +108,25 @@ STRATA = os.environ.get("STRATA") == "1"
 BUCKETS = ((0, 1), (2, 4), (5, 19), (20, None))
 SYN_OF = prior.load("syn") if STRATA else {}
 LAST_STRATA = ""
+# SHIFT_WS sweeps the weight on the mass-shifted analog term (shifted.py): every pool
+# candidate gains w * max_a sim(a)^SHIFT_P * Tanimoto(c, a) over the molecule's SHIFT_N
+# best relatives within SHIFT_WIN Da, matched directly or shifted by the mass
+# difference (SHIFT_SIM entropy|cos). The relatives depend only on the query, so
+# build_jobs finds them once and caches them under data/shift_cache.
+SHIFT_WS = tuple(float(x) for x in os.environ.get("SHIFT_WS", "0").split(","))
+SHIFT_P = float(os.environ.get("SHIFT_P", 3.0))
+SHIFT_N = int(os.environ.get("SHIFT_N", 80))
+SHIFT_WIN = float(os.environ.get("SHIFT_WIN", 200.0))
+SHIFT_SIM = os.environ.get("SHIFT_SIM", "entropy")
+# SHIFT_STATS=1 prints, per class, how often the answer has a close relative among
+# them, against the single same-mass seed analog.py propagates from today.
+SHIFT_STATS = os.environ.get("SHIFT_STATS") == "1"
+SHIFT_ON = SHIFT_STATS or any(SHIFT_WS)
+# BY_LIB=1 splits class 3 MRR by the query's library: enveda-180's synthetic screening
+# compounds against the rest, whose chemistry is nearer the hidden test's (RESULTS 31).
+BY_LIB = os.environ.get("BY_LIB") == "1"
+LIB_OF = {}
+LAST_BY_LIB = ""
 
 
 
@@ -130,6 +151,21 @@ def build_jobs():
     neg = [a for a, (_, p) in ADDUCTS.items() if not p]
     qkey, qclass, query = sp["qkey"], sp["qclass"], sp["query"]
 
+    cached, si = {}, None
+    if SHIFT_ON:
+        assert TRUE_ADDUCT, "the shifted analog term needs the query's neutral mass"
+        settings = {"sim": SHIFT_SIM, "win": SHIFT_WIN, "n": SHIFT_N, "c2_banned": C2_BANNED}
+        cache = shifted.cache_path(SPLITS, settings, len(ix["npk"]))
+        if os.path.exists(cache):
+            with np.load(cache) as c:
+                ends = np.cumsum(c["count"])
+                for q, e, n in zip(c["qkey"], ends, c["count"]):
+                    cached[q] = list(zip(c["akey"][e - n:e].tolist(),
+                                         c["asim"][e - n:e].tolist()))
+            print(f"analog lists from {cache}", flush=True)
+        else:
+            si = shifted.ShiftIndex(ix, drop=sp["drop"], banned=sp["banned"])
+
     jobs, answers = [], {1: {}, 2: {}, 3: {}}
     for k in np.unique(qkey):
         m = qkey == k
@@ -140,11 +176,76 @@ def build_jobs():
             mass = formula.counts(ix["smiles"][rows[0]].decode())[1]
             add = [min(add, key=lambda a: abs(mass + ADDUCTS[a][0] - spectra[0][2]))]
         spec, smiles = se.score_structures(spectra)
+        analogs = []
+        if SHIFT_ON:
+            if si is None:
+                analogs = cached[k]
+            else:
+                neutral = spectra[0][2] - ADDUCTS[add[0]][0]
+                analogs = si.search(spectra, neutral, bool(ix["ion"][rows[0]]),
+                                    window=SHIFT_WIN, n=SHIFT_N, kind=SHIFT_SIM)
+            # A class 2/3 answer has no spectra left in the index, so it cannot be its
+            # own relative; if it is, the split leaks through the analog index.
+            if cls in (2, 3):
+                assert k not in {a for a, _ in analogs}, f"leak: {k} is its own analog"
+        LIB_OF[k] = bytes(ix["lib"][rows[0]])
         jobs.append((cls, k, spec, smiles, float(spectra[0][2]), add,
-                     query_fp(model, spectra), spectra))
+                     query_fp(model, spectra), spectra, analogs))
         answers[cls][k] = ix["smiles"][rows[0]].decode()
-    del ix, se, model
+    if si is not None:
+        lists = [(j[1], j[8]) for j in jobs]
+        np.savez(cache, qkey=np.array([q for q, _ in lists], "S14"),
+                 count=np.array([len(a) for _, a in lists], np.int32),
+                 akey=np.array([x for _, a in lists for x, _ in a], "S14"),
+                 asim=np.array([s for _, a in lists for _, s in a], np.float32))
+        print(f"analog lists written to {cache}", flush=True)
+    del ix, se, model, si
     return jobs, answers, sp["banned"], bits
+
+
+def shift_stats(jobs):
+    """How often each class's answer has a close relative among its analogs, against
+    the top same-mass spectral match that analog.py seeds from today."""
+    with np.load(analog.DESC) as d:
+        keys, fps = d["key"], d["fp"]
+    o = np.argsort(keys, kind="stable")
+    keys, fps = keys[o], fps[o]
+
+    def fp(k):
+        i = np.searchsorted(keys, k)
+        return fps[i] if i < len(keys) and keys[i] == k else None
+
+    def best_tan(a, others):
+        others = [b for b in others if b is not None]
+        if a is None or not others:
+            return 0.0
+        B = np.array(others)
+        inter = np.bitwise_count(B & a).sum(1)
+        union = np.bitwise_count(B | a).sum(1)
+        return float((inter / np.maximum(union, 1)).max())
+
+    for cls in (2, 3):
+        for group in ("other", "enveda-180"):
+            sel = [j for j in jobs if j[0] == cls
+                   and (LIB_OF[j[1]] == b"enveda-180") == (group == "enveda-180")]
+            if not sel:
+                continue
+            n = len(sel)
+            any_, top1, ta, ts = 0, [], [], []
+            for _, k, spec, *_, analogs in sel:
+                af = fp(k)
+                if analogs:
+                    any_ += 1
+                    top1.append(analogs[0][1])
+                ta.append(best_tan(af, [fp(a) for a, _ in analogs]))
+                seed = max(spec, key=spec.get) if spec else None
+                ts.append(best_tan(af, [fp(seed)]) if seed is not None else 0.0)
+            ta, ts = np.array(ta), np.array(ts)
+            print(f"  class {cls} {group:<10} n {n:4d}  any analog {any_ / n:6.1%}  "
+                  f"max T>=0.5 {np.mean(ta >= 0.5):6.1%}  >=0.7 {np.mean(ta >= 0.7):6.1%}  "
+                  f"median top-1 sim {np.median(top1) if top1 else 0:.3f}   |  "
+                  f"same-mass seed T>=0.5 {np.mean(ts >= 0.5):6.1%}  >=0.7 {np.mean(ts >= 0.7):6.1%}",
+                  flush=True)
 
 
 _explained = {}
@@ -166,9 +267,9 @@ def fits(an, key_, pm, add):
 
 
 def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, norm=FP_NORM,
-          pw=0.0, pgate=9.0):
+          pw=0.0, pgate=9.0, sw=0.0):
     preds, sizes, kept, spread = {1: {}, 2: {}, 3: {}}, [], [], []
-    for j, (cls, k, spec, smiles, pm, add, fpq, spectra) in enumerate(jobs):
+    for j, (cls, k, spec, smiles, pm, add, fpq, spectra, analogs) in enumerate(jobs):
         if SPEC_MASS != "0":
             fit = {q: v for q, v in spec.items() if fits(an, q, pm, add)}
             total = dict(fit)
@@ -196,6 +297,14 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, n
                 key_ = an.key[r]
                 total[key_] = total.get(key_, 0.0) + g * float(v)
                 sm.setdefault(key_, an.smiles[r])
+        known = [(an.row[a], s) for a, s in analogs if a in an.row] if sw else []
+        if known and len(pool):
+            t = shifted.analog_term(an.fp[pool], an.fp[np.array([r for r, _ in known])],
+                                    np.array([s for _, s in known]), SHIFT_P)
+            for r, v in zip(pool, t):
+                key_ = an.key[r]
+                total[key_] = total.get(key_, 0.0) + sw * float(v)
+                sm.setdefault(key_, an.smiles[r])
         if delta:
             for key_ in total:
                 smi = sm[key_].decode() if isinstance(sm[key_], bytes) else sm[key_]
@@ -215,6 +324,8 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, n
         print(f"  oracle keeps a median {np.median(kept):.1%} of candidates", flush=True)
     if DUMP:
         tag = f"g{gamma:g}_n{norm or 'raw'}_d{delta:g}_p{pw:g}_pg{pgate:g}"
+        if sw:
+            tag += f"_s{sw:g}"
         for c in (1, 2, 3):
             ks = sorted(answers[c])
             _dump[f"{tag}_c{c}_key"] = np.array(ks)
@@ -230,6 +341,14 @@ def score(an, bits, jobs, answers, gamma=GAMMA, ppm=None, delta=0.0, gate=0.0, n
                   if lo <= n_syn[k] and (hi is None or n_syn[k] <= hi)]
             cells.append(f"{lo}-{hi if hi is not None else ''} {np.mean(rr) if rr else float('nan'):.4f} (n {len(rr)})")
         LAST_STRATA = "    class 3 by answer synonyms:  " + "   ".join(cells)
+    if BY_LIB:
+        global LAST_BY_LIB
+        cells = []
+        for name, env in (("enveda-180", True), ("other", False)):
+            rr = [reciprocal_rank(preds[3].get(k, []), a) for k, a in answers[3].items()
+                  if (LIB_OF[k] == b"enveda-180") == env]
+            cells.append(f"{name} {np.mean(rr) if rr else float('nan'):.4f} (n {len(rr)})")
+        LAST_BY_LIB = "    class 3 by query lib:  " + "   ".join(cells)
     if spread and os.environ.get("SHOW_SPREAD") == "1":
         print(f"  pool tanimoto std: median {np.median(spread):.4f}", flush=True)
     return [mrr(preds[c], answers[c]) for c in (1, 2, 3)], int(np.median(sizes))
@@ -244,6 +363,10 @@ def coverage(an, jobs):
 
 def main():
     jobs, answers, banned, bits = build_jobs()
+    if SHIFT_STATS:
+        print(f"\nrelatives within {SHIFT_WIN:g} Da ({SHIFT_SIM}, top {SHIFT_N}), "
+              "Tanimoto to the answer:", flush=True)
+        shift_stats(jobs)
     print(f"\n{'frac':>6}{'delta':>7}{'pool':>8}{'cover3':>9}{'class1':>9}{'class2':>9}"
           f"{'class3':>9}{'quality':>9}{'LB':>8}")
     out = []
@@ -253,11 +376,14 @@ def main():
             os.environ["EXT_FRAC"] = str(f)
             an = Analog(banned=banned, external=f > 0)
         cov = coverage(an, jobs)
-        for d, gt, g, nm, pw, pg in [(d, gt, g, nm, pw, pg) for d in DELTAS for gt in GATES
-                                     for nm in NORMS for g in GAMMAS for pw in PRIOR_WS
-                                     for pg in PRIOR_GATES]:
+        for d, gt, g, nm, pw, pg, sw in [(d, gt, g, nm, pw, pg, sw) for d in DELTAS
+                                         for gt in GATES for nm in NORMS for g in GAMMAS
+                                         for pw in PRIOR_WS for pg in PRIOR_GATES
+                                         for sw in SHIFT_WS]:
             v, med = score(an, bits, jobs, answers, gamma=g, ppm=f if MODE == "ppm" else None,
-                           delta=d, gate=gt, norm=nm, pw=pw, pgate=pg)
+                           delta=d, gate=gt, norm=nm, pw=pw, pgate=pg, sw=sw)
+            if len(SHIFT_WS) > 1:
+                print(f"  shift {sw:<5g}", end="")
             if len(GATES) > 1:
                 print(f"  gate {gt:g}", end="")
             if len(GAMMAS) > 1 or len(NORMS) > 1:
@@ -275,6 +401,8 @@ def main():
                   f"{v[2]:>9.4f}{q:>9.3f}{lb:>8.4f}", flush=True)
             if STRATA:
                 print(LAST_STRATA, flush=True)
+            if BY_LIB:
+                print(LAST_BY_LIB, flush=True)
         out.append((f, med, cov, v, q))
         if MODE != "ppm":
             del an
