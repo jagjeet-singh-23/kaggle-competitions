@@ -1173,3 +1173,94 @@ PubChem, pop2). The held-out splits cannot price dilution for the hidden test, b
 their class 3 answers come from the same libraries the pools are drawn from. **Pool
 expansion is closed again**, and a new one should not get an LB slot on held-out
 evidence. v15 stays the final selection.
+
+## 32. Mass-shifted analogs: relatives within ±200 Da re-rank class 3 near the top
+
+**The channel.** `shifted.py` keeps one representative spectrum per (structure, polarity),
+timsTOF libraries first, and matches a query against every representative whose neutral
+mass is within ±200 Da: entropy similarity (Li et al. 2021), the max of the direct match
+and the match with the reference shifted by the neutral-mass difference, top 80.
+`dilute.py` adds `SW · max_a sim_a³ · T(c, a)` to every pool candidate `c` (Morgan Tanimoto
+to relative `a`), behind `SHIFT_WS` (default 0). It adds no candidates, so it cannot dilute
+the pool the way §11/§31 did. ShiftIndex builds in 1 s; a search costs 0.32 s per spectrum
+(cosine 0.31); analog lists are cached per split and settings.
+
+**A bug that would have inflated everything.** 30% of positive and 51% of negative
+representatives hold two or more peaks in one 0.01 Da bin, and the first vectorised search
+matched a query peak to each of them: similarities reached 1.38. Peaks sharing a bin are
+now merged before matching, in both kinds and both code paths, and the cache key carries a
+version so lists from the buggy search are never read.
+
+**Do relatives exist?** `splits_bigord`'s 302 non-`enveda-180` class 3 answers, entropy,
+`C2_BANNED=1` (LEARNING.md entry 1):
+
+| relative searched among | Tanimoto ≥ 0.5 | ≥ 0.7 |
+|---|---|---|
+| best of the top-80 within ±200 Da | 66.2% | 34.8% |
+| top-1 only | 33.1% | 16.2% |
+| today's same-mass seed | 17.2% | 8.3% |
+| control: 80 random structures within ±200 Da | 9.6% | 6.0% |
+
+Cosine finds 54.3%. Without long-chain answers (267) the best-of-80 is 62.2% against 3.0%
+at random; on the 35 long-chain ones random structures already reach 60.0%, because Morgan
+radius 2 does not see chain length. The commonest answer-relative mass differences are
+±14.02 (CH₂, 35 of 200), ±28.03 (14), 0.00 (11) and ±15.99 (O, 5).
+
+**Sweep** (v15 config: gamma 32, COCONUT synonym prior w 0.5 gate 0.8; entropy, p 3,
+`C2_BANNED=1`; `splits_bigord` on the 2-seed ensemble, `splits_big` on the 4-seed one):
+
+| SW | bigord class 1 | bigord class 2 | **bigord non-env class 3** | big class 1 | big class 2 | big class 3 (covered) |
+|---|---|---|---|---|---|---|
+| 0 | 0.9269 | 0.0320 | 0.1355 | 0.9152 | 0.0344 | 0.4819 |
+| 4 | 0.9249 | 0.0331 | 0.1398 | 0.9181 | 0.0358 | 0.4967 |
+| 8 | 0.9238 | 0.0350 | 0.1428 | 0.9160 | 0.0359 | 0.5095 |
+| **16** | 0.9232 | 0.0348 | **0.1507** | 0.9151 | 0.0382 | 0.5234 |
+| 32 | 0.9148 | 0.0364 | 0.1488 | 0.9120 | 0.0409 | 0.5305 |
+| 64 | 0.9110 | 0.0365 | 0.1494 | 0.9155 | 0.0409 | 0.5375 |
+
+SW 0 reproduces §31's v15 row (0.927 / 0.135) and §30's ensemble-of-4 row (0.9152 /
+0.0344 / 0.4819). Without `C2_BANNED` class 3 is identical, class 1 within 0.0001, and plain
+class 2 rises far more (bigord 0.543 → 0.641 at 16 → 0.694 at 64; big 0.514 → 0.613 →
+0.667), the kind of class 2 gain the LB does not pay (§16). At SW 16 the non-env answers
+stop gaining and bigord's class 1 starts to fall; the covered split keeps gaining to 64.
+
+Variants at SW 16 (each also run at 8 and 32; only p 1 at 32 edges past the default, 0.1512 /
+0.5309, with bigord class 1 down to 0.9087):
+
+| | bigord non-env class 3 | bigord class 1 | big class 3 | big class 1 |
+|---|---|---|---|---|
+| **entropy, p 3** | **0.1507** | 0.9232 | 0.5234 | 0.9151 |
+| cosine, p 3 | 0.1444 | 0.9206 | 0.5232 | 0.9142 |
+| entropy, p 1 | 0.1485 | 0.9146 | 0.5298 | 0.9170 |
+| entropy, p 6 | 0.1426 | 0.9265 | 0.5055 | 0.9174 |
+
+The variants sit within ~0.006 of each other on 302 answers, so the design's default stays.
+Entropy's 12-point lead in finding relatives is worth 0.006 of MRR on the non-env answers
+and nothing on the covered split.
+
+**Where the gain comes from** (`data/jobs/rank_shift.py`, per-molecule ranks at SW 0 and 16):
+
+- On the non-env answers only 65 are in the top 25 at either weight. 16 move up and 3 down;
+  5 go from rank 2–5 to 1 and 4 rise out of 6–25, and nothing below 25 reaches the top 5.
+  The term re-orders the top of the list, it does not rescue answers.
+- The gain is where experiment 1 found relatives: answers with a Tanimoto ≥ 0.5 relative go
+  0.645 → 0.750 (n 43), those without 0.599 → 0.602 (n 22). On `splits_big` the same split
+  is 0.541 → 0.615 (n 589) against 0.547 → 0.540 (n 296): with no true relative the term
+  pulls another family up and costs a little.
+- Class 1 is a swap of near-ties: on bigord 12 answers fall from rank 1 to 2–5 and 9 rise
+  the other way; on big 13 go up and 12 down.
+
+(The rank script reads 303 non-env answers against BY_LIB's 302, because it takes a key's
+library from its last query row and BY_LIB from its first; the MRRs agree to 0.0005.)
+
+**LB prediction at SW 16:**
+
+- Plan's main formula, non-env class 3 at 0.735 (the hidden test covered like the non-env
+  answers, 25%): 0.140 × −0.0037 + 0.126 × +0.0028 + 0.735 × +0.0152 = **+0.011**.
+- Coverage-scaled, HANDOFF's rule (0.12 × the covered split's delta):
+  0.735 × 0.12 × 0.0415 − 0.0005 + 0.0004 = **+0.0035**.
+- Between them: the non-env gain is all on its 76 covered answers (≈ +0.060 each), at
+  coverage 0.12: **+0.005**.
+
+The spread is the coverage question an LB run would test. On the ship rule (+0.005 scaled)
+this is a probe, not a ship; the decision is made with the kernel in hand.
