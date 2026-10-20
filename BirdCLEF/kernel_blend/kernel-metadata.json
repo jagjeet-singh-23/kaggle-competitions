@@ -1,0 +1,18 @@
+{
+  "id": "jagjeetsingh23/birdclef26-perch-sed-blend",
+  "title": "BirdCLEF26 Perch SED blend",
+  "code_file": "birdclef_blend_submit.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "competition_sources": ["birdclef-2026"],
+  "dataset_sources": [
+    "jagjeetsingh23/birdclef-kernel-code",
+    "jagjeetsingh23/birdclef-perch-assets",
+    "rishikeshjani/perch-onnx-for-birdclef-2026",
+    "jagjeetsingh23/birdclef-sed-models"
+  ],
+  "kernel_sources": []
+}

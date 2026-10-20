@@ -645,7 +645,149 @@ a strong teacher. Ranked by expected value:
 4. **Re-tune smoothing for Perch.** k and alpha were chosen on BirdNET. Locally,
    smoothing adds +0.0067 on Perch against +0.0077 on BirdNET. Cheap, small.
 
-## 16. Files
+## 16. SED pilot: no-go with either teacher
+
+Section 15's item 1, at pilot scale: one fold of an HGNetV2-B0 SED, trained on
+public pseudo-labels, rank-blended with the Perch kernel. The go bar was 0.9318
+private, Perch plus 0.005.
+
+| submission | public | private |
+|---|---|---|
+| Perch kernel (section 14) | 0.92423 | **0.92681** |
+| SED alone | 0.87753 | 0.86072 |
+| Perch + SED, rank blend w=0.5 | 0.91718 | 0.91148 |
+
+**No-go.** The blend is 0.0153 below Perch alone. A 0.86 model given half the
+weight dilutes a 0.93 one. SED alone sits at BirdNET's level (0.870), and 0.056
+below DS@GT's HGNetV2-B0 SED (0.917). SED also drops 0.017 from public to private,
+while Perch gains 0.003.
+
+**The likely cause is the teacher.** The public pseudo-label file also holds the
+teacher's out-of-fold predictions on our 739 labelled windows. They score
+**0.8275**, below Perch (0.9144) and BirdNET (0.8880) on the same windows. This is
+suggestive, not proof: the teacher's labels on unlabelled windows may come from
+models trained on all the labelled files. Still, SED alone at 0.861 sits next to
+13th place's CNN trained on a weak teacher (0.864), not next to their CNN trained
+on a strong one (0.934). The second suspect is data scale. The pilot used 12,000
+pseudo windows, 13% of the ~92,700 that 13th place used, and one fold. Phase B
+separates the two: it keeps the same 12,000 windows and swaps only the targets for
+the Perch kernel's own (`pseudo_targets_B.npy`).
+
+The fold-0 validation AUC climbed from 0.55 to 0.970 and was useless as a guide.
+The teacher was trained on the labelled files, so its pseudo-labels carry their
+labels into training.
+
+**Pilot data** (`sed_cache.py`, 8.4 GB, int16):
+
+| source | count |
+|---|---|
+| pseudo-labelled windows, chosen by seed only | 12,000 of 127,104 |
+| labelled soundscape windows, true labels, folds ≠ 0 train | 739 |
+| focal clips, ≤ 30 per class, first 15 s, random 5 s crop | 5,313 (18.7 h) |
+
+**Training** (`sed_train.py`, Kaggle T4, torch 2.11 / timm 1.0.29 preinstalled):
+20 epochs, batch 64, AdamW 5e-4, OneCycle, mixup, EMA 0.999.
+
+| | |
+|---|---|
+| epoch 0 | 509 s, loader wait 83% (cold reads from the dataset mount) |
+| epochs 1–19 | ~75 s, 238 samples/s, loader wait < 1% |
+| peak GPU memory | 3.22 GB |
+| total GPU time | ~33 min, plus a ~16 min queue |
+
+**Inference** on Kaggle CPU (`sed_infer.py`): SED takes 41–49 ms per window and
+Perch 169–198. The 600-file projection is 33–34 min, so the 90-minute limit
+leaves room for 2–3 more SED models.
+
+**ONNX Runtime bug.** With the default graph optimizations, ORT 1.24.4 changed the
+trained model's outputs by up to 0.078. At initialisation the same graph matched
+torch, so the export selftest passed. With `ORT_DISABLE_ALL` it matches torch to
+8e-7, at +11% CPU time. The selftest now also checks that the CPU path reproduces
+the GPU predictions from training (1e-6).
+
+**Provenance.** The pseudo-labels are `pseudo_labels_v2s_oof_raw.csv` from Kaggle
+dataset `aliozanmemetoglu/raw-pseudos`. Its licence is "unknown", so they were used
+only in this private experiment. Kernels:
+
+| kernel | version | role |
+|---|---|---|
+| `birdclef26-sed-train` | v1 | training |
+| `birdclef26-perch-sed-blend` | v1 | blend, submission 57434345 |
+| `birdclef26-perch-sed-blend` | v2 | SED alone, submission 57434639 |
+
+Datasets: `birdclef-sed-cache` (07:35 UTC), and `birdclef-kernel-code` and
+`birdclef-sed-models` (08:33 UTC), all on 2026-10-20.
+
+### Phase B: the Perch kernel as teacher, same windows
+
+Phase B changed one thing: the targets of the 12,000 pseudo windows. For each
+class, A's values were re-assigned in the order of the Perch kernel's own scores
+for that class (`teacher.py`, quantile mapping). Prevalence and confidence stay
+A's, and only the ranking changes. Windows, labelled and focal data, fold, seed,
+recipe and W_SED are the pilot's.
+
+| submission | public | private |
+|---|---|---|
+| SED alone, A (public teacher) | 0.87753 | 0.86072 |
+| SED alone, B (Perch teacher) | 0.85621 | 0.87352 |
+| blend w=0.5, A | 0.91718 | 0.91148 |
+| blend w=0.5, B | 0.89834 | 0.91027 |
+
+**No-go, and the teacher is not the main cause.**
+- B's SED alone gains 0.0128 on private but loses 0.0213 on public. The two
+  splits disagree by more than the gain.
+- The B blend is 0.0012 below A on private and 0.0188 below on public. It is still
+  0.017 below Perch alone.
+- The rule's go-bars were +0.02 for SED alone and 0.9318 for the blend. Both were
+  missed.
+- Its third case, "B within 0.01 of A", is missed by 0.003 on private. With public
+  moving the other way, this reads as no teacher effect beyond noise.
+
+Data scale is the next suspect, then the recipe.
+
+**The two teachers order the windows very differently.** Per-class Spearman(A, B)
+over the 12,000 windows:
+
+| | Spearman(A, B) |
+|---|---|
+| q25 / median / q75 | 0.155 / 0.262 / 0.385 |
+| head classes (75) | median 0.389 |
+| zero-shot classes (157) | median 0.203 |
+| cold-start classes (2) | median 0.536 |
+
+The 10 lowest are all zero-shot birds, with ρ from −0.115 to 0.010. The SED was
+trained on two very different orderings of the same windows, and its LB barely
+moved. At this scale, the 12,000 pseudo windows do not decide the SED's score.
+
+**Other details.**
+- Fold-0 validation AUC ended at 0.9729 (A: 0.9697). Both are inflated: the
+  Perch teacher's heads were fit on all labelled files, fold 0 included.
+- The teacher's smoothed scores tie on about 70 of the 12,000 windows per class,
+  never on a whole row. Tied windows share the mean of their A values, so sorted B
+  differs from sorted A by a median of 1.2e-4 and a maximum of 0.057.
+- The teacher reproduces `kernel_perch` to 1.1e-16 on 20 unlabelled files.
+
+**Cost.**
+
+| step | time |
+|---|---|
+| Perch over all 127,104 unlabelled windows, Mac CPU | ~1.5 h (42 ms/window), 43 resumable shards |
+| B targets, including a fresh embed of the 739 labelled windows | a few minutes (not timed) |
+| training, Kaggle T4 | epoch 0 262 s, then ~74 s per epoch, ~28 min in all |
+
+Perch's scores now exist for every unlabelled window, so B targets for all 127,104
+cost minutes, not hours.
+
+| kernel | version | role |
+|---|---|---|
+| `birdclef26-sed-train-b` | v1 | training on B targets |
+| `birdclef26-perch-sed-blend` | v3 | B blend, submission 57441058 |
+| `birdclef26-perch-sed-blend` | v4 | B SED alone, submission 57441268 |
+
+Datasets: `birdclef-sed-targets` (13:18 UTC) and a `birdclef-sed-models` version
+holding both ONNX files (13:54 UTC), on 2026-10-20.
+
+## 17. Files
 
 ```
 birdnet.py            BirdNET V2.4 wrapper; logits + penultimate embedding
@@ -664,7 +806,17 @@ smooth.py             temporal smoothing sweep
 mixup.py, mixeval.py  focal calls mixed into soundscapes (negative)
 kernel/               BirdNET kernel, v1-v4              0.87008 private
 kernel_perch/         Perch kernel                       0.92681 private
+sed_model.py          log-mel front-end + HGNetV2-B0 SED head, ONNX export
+sed_cache.py          int16 pilot cache: pseudo, labelled, focal windows
+sed_train.py          one SED fold on Kaggle GPU
+sed_infer.py          SED on CPU via ONNX Runtime; rank blend
+kernel_sed_train/     SED training kernel
+teacher.py            kernel_perch as functions; Perch over unlabelled; B targets
+kernel_sed_train_b/   SED training kernel on B targets
+kernel_blend/         Perch + SED kernel                 0.91148 / 0.91027 private (no-go)
 ```
 
 Self-checks that need no competition data: `python3 rung1c.py --selftest`,
-`python3 smooth.py --selftest`, `python3 head.py --selftest`.
+`python3 smooth.py --selftest`, `python3 head.py --selftest`, `python3 sed_model.py --selftest`,
+`python3 sed_train.py --selftest`. `python3 teacher.py --selftest` needs the competition
+data and the Perch ONNX.

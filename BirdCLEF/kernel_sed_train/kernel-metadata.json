@@ -1,0 +1,17 @@
+{
+  "id": "jagjeetsingh23/birdclef26-sed-train",
+  "title": "BirdCLEF26 SED train",
+  "code_file": "sed_train.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "competition_sources": ["birdclef-2026"],
+  "dataset_sources": [
+    "jagjeetsingh23/birdclef-kernel-code",
+    "jagjeetsingh23/birdclef-sed-cache"
+  ],
+  "kernel_sources": []
+}
