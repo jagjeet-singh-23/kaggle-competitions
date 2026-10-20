@@ -2,6 +2,7 @@
 
     python3 teacher.py --selftest
     python3 teacher.py --embed      Perch over every unlabelled soundscape -> shards
+    python3 teacher.py --targets    pseudo_targets_B.npy for the pilot windows
 """
 import os
 import sys
@@ -187,6 +188,94 @@ def quantile_map(scores, ref):
     return out
 
 
+def targets_b(scores, A):
+    """Phase B targets: the teacher's order, A's values (per class)."""
+    return quantile_map(scores, A.astype(np.float32)).astype(np.float16)
+
+
+def check_b(scores, A, B):
+    """What targets_b guarantees per class, ties included: B follows the scores' order,
+    rows with a unique score hold A's value at that rank exactly, and tied rows share a
+    mean, so the column sum is A's up to float16 rounding."""
+    assert B.dtype == np.float16 and B.shape == A.shape and np.isfinite(B.astype(np.float32)).all()
+    a, b = A.astype(np.float64), B.astype(np.float64)
+    for j in range(A.shape[1]):
+        o = np.argsort(scores[:, j], kind="stable")
+        assert (np.diff(b[o, j]) >= 0).all(), f"class {j}: B does not follow the scores' order"
+        _, g, n = np.unique(scores[:, j], return_inverse=True, return_counts=True)
+        alone = n[g[o]] == 1
+        assert (b[o, j][alone] == np.sort(a[:, j])[alone]).all(), f"class {j}: untied rows are not A's values"
+        assert abs(b[:, j].sum() - a[:, j].sum()) <= 2**-11 * np.abs(a[:, j]).sum() + 1e-6, \
+            f"class {j}: the column sum moved"
+
+
+def targets():
+    """pseudo_targets_B.npy for the pilot windows, in pseudo_meta.csv order."""
+    import glob
+
+    import pandas as pd
+    from scipy.stats import spearmanr
+
+    from perch import Perch, WIN, species_map
+
+    cache = os.environ.get("SED_CACHE", "/Volumes/Extreme SSD/kaggle/BirdCLEF/jobs/sed-cache")
+    tax = pd.read_csv(f"{DATA}/taxonomy.csv", dtype={"primary_label": str})
+    classes = tax.primary_label.tolist()
+    idx = species_map(tax)
+    keep = idx[idx >= 0]
+    Ltr, Etr, Y = labelled(Perch(batch=16), keep, classes)
+    fc = np.load(f"{DATA}/focal_cap30_perch.npz")
+    state = fit(Ltr, Etr, Y, fc["emb"].astype(np.float32), fc["label"], idx >= 0)
+
+    shards = sorted(p for p in glob.glob(f"{OUT}/shard_*.npz") if not p.endswith(".tmp.npz"))
+    assert len(shards) == -(-len(unlabelled_files()) // SHARD), len(shards)
+    Lk, H, C, names, starts = [], [], [], [], []
+    for p in shards:
+        z = np.load(p)
+        h, c = raw_scores(state, z["logits"], z["emb"])
+        Lk.append(z["logits"])
+        H.append(h)
+        C.append(c)
+        names.append(z["filename"])
+        starts.append(z["start_s"])
+    Lk, H, C = np.concatenate(Lk), np.concatenate(H), np.concatenate(C)
+    stems = np.char.replace(np.concatenate(names), ".ogg", "")
+    starts = np.concatenate(starts)
+    P = smooth(combine(state, Lk, H, C), stems, starts)
+    rid = pd.Index(np.char.add(np.char.add(stems, "_"), (starts + WIN).astype(str)))
+    assert rid.is_unique and len(rid) == 127_104, len(rid)
+    print(f"teacher scored {len(rid):,} windows", flush=True)
+
+    meta = pd.read_csv(f"{cache}/pseudo_meta.csv")
+    pos = rid.get_indexer(meta.row_id)
+    assert (pos >= 0).all(), f"{(pos < 0).sum()} pilot rows not scored"
+    for i in (0, len(meta) // 2, len(meta) - 1):        # the lookup, checked another way
+        r = meta.iloc[i]
+        hit = np.flatnonzero((stems == r.filename[:-4]) & (starts == r.start_s))
+        assert hit.tolist() == [pos[i]], (r.row_id, hit, pos[i])
+    A = np.load(f"{cache}/pseudo_targets_A.npy")
+    B = targets_b(P[pos], A)
+    check_b(P[pos], A, B)
+    np.save(f"{cache}/pseudo_targets_B.npy", B)
+    print(f"wrote {cache}/pseudo_targets_B.npy {B.shape}", flush=True)
+
+    # Diagnosis: how differently the two teachers order the same windows, by route.
+    route = np.array(["head" if j in state["models"] else "zero-shot" if state["hit"][j]
+                      else "cold-start" for j in range(len(classes))])
+    rho = np.array([spearmanr(A[:, j], B[:, j]).statistic if A[:, j].std() > 0 else np.nan
+                    for j in range(len(classes))])
+    q = np.nanpercentile(rho, [25, 50, 75])
+    print(f"Spearman(A, B) per class over {len(B):,} windows: "
+          f"q25 {q[0]:.3f}  median {q[1]:.3f}  q75 {q[2]:.3f}")
+    for r in ("head", "zero-shot", "cold-start"):
+        m = route == r
+        print(f"  {r:<10} {m.sum():3d} classes, median {np.nanmedian(rho[m]):.3f}")
+    print("10 lowest:")
+    for j in np.argsort(np.nan_to_num(rho, nan=9))[:10]:
+        print(f"  {classes[j]:<10} {tax.class_name[j]:<9} {route[j]:<10} rho {rho[j]:.3f}  "
+              f"A>0.5 on {(A[:, j] > 0.5).sum()} windows")
+
+
 def _fidelity(files):
     """The teacher must score these files exactly as kernel_perch does."""
     import subprocess
@@ -263,6 +352,22 @@ def selftest():
     tied = out[[3, 9, 17, 25, 31], 1]
     assert np.allclose(tied, tied[0]), "tied scores must get equal values"
 
+    A = rng.random((60, 4)).astype(np.float16)
+    B = targets_b(rng.random((60, 4)), A)
+    assert B.dtype == np.float16 and B.shape == A.shape
+    assert (np.sort(B, 0) == np.sort(A, 0)).all(), "B must hold exactly A's values per class"
+
+    scores = rng.random((60, 4))                        # real teacher scores tie (~70/column)
+    scores[[2, 7, 11], 0] = scores[[20, 30], 2] = 0.5
+    B = targets_b(scores, A)
+    check_b(scores, A, B)
+    for bad in (B[::-1], (B.astype(np.float32) + 0.01).astype(np.float16)):
+        try:
+            check_b(scores, A, bad)
+        except AssertionError:
+            continue
+        raise AssertionError("check_b accepted a B that is not A's values in the scores' order")
+
     diff = _fidelity(files[:20])
     assert diff < 1e-6, diff
     print(f"teacher self-checks passed (teacher vs kernel_perch on 20 files: max diff {diff:.1e})")
@@ -273,3 +378,5 @@ if __name__ == "__main__":
         selftest()
     elif "--embed" in sys.argv:
         embed()
+    elif "--targets" in sys.argv:
+        targets()

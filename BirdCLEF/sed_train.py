@@ -98,6 +98,14 @@ def find(marker, root="/kaggle/input"):
     raise FileNotFoundError(f"{marker} not found under {root}")
 
 
+def pseudo_targets(cache, labels, root="/kaggle/input"):
+    """The targets file for a teacher: in the cache if it is there, else wherever
+    it was shipped under root (Phase B's targets are a dataset of their own)."""
+    name = f"pseudo_targets_{labels}.npy"
+    path = f"{cache}/{name}"
+    return path if os.path.exists(path) else f"{find(name, root)}/{name}"
+
+
 @torch.no_grad()
 def predict(model, fe, ds, device, batch=64):
     model.eval()
@@ -134,8 +142,10 @@ def main():
     lm = pd.read_csv(f"{cache}/labelled_meta.csv")
     lt = np.load(f"{cache}/labelled_targets.npy")
     folds = labelled_folds(lm)
+    targets = pseudo_targets(cache, labels)
+    print(f"pseudo targets: {targets}", flush=True)
     train_ds = ConcatDataset([
-        WindowSet(f"{cache}/pseudo_audio.npy", np.load(f"{cache}/pseudo_targets_{labels}.npy")),
+        WindowSet(f"{cache}/pseudo_audio.npy", np.load(targets)),
         FocalSet(f"{cache}/focal_audio.npy", pd.read_csv(f"{cache}/focal_index.csv"),
                  np.load(f"{cache}/focal_targets.npy"), seed=fold),
         WindowSet(f"{cache}/labelled_audio.npy", lt, rows=np.where(folds != fold)[0]),
@@ -239,6 +249,18 @@ def selftest():
         assert not torch.equal(a[0], b[0]), "workers drew identical crops"
     finally:
         os.remove(path)
+
+    # Phase B's targets ship in their own dataset, next to a cache that holds A's.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(f"{d}/cache")
+        os.makedirs(f"{d}/input/targets/v1")
+        np.save(f"{d}/cache/pseudo_targets_A.npy", np.zeros(1))
+        np.save(f"{d}/input/targets/v1/pseudo_targets_B.npy", np.zeros(1))
+        assert pseudo_targets(f"{d}/cache", "A", f"{d}/input") == f"{d}/cache/pseudo_targets_A.npy"
+        assert pseudo_targets(f"{d}/cache", "B", f"{d}/input") == \
+            f"{d}/input/targets/v1/pseudo_targets_B.npy"
 
     torch.manual_seed(0)
     xb, yb = torch.randn(4, 1, 8, 8), torch.rand(4, 234)
