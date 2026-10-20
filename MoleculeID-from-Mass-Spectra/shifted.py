@@ -61,6 +61,26 @@ def _binned(mz, w):
     return u, out
 
 
+def _runs(bins, w, with_bins=False):
+    """Merge each row's peaks that share a bin: (summed weight, row[, bin]) per run.
+
+    Rows are in ascending m/z (library.trim sorts them), and shifting a row by one
+    constant keeps that order, so a bin's peaks are adjacent and one reduceat merges
+    them. Padding (-1) forms a run of zero weight.
+    """
+    bins = np.asarray(bins)
+    if not bins.size:
+        empty = np.zeros(0)
+        return (empty, empty.astype(np.int64), empty.astype(np.int64)) if with_bins \
+            else (empty, empty.astype(np.int64))
+    start = np.ones(bins.shape, bool)
+    start[:, 1:] = bins[:, 1:] != bins[:, :-1]
+    at = np.flatnonzero(start)
+    s = np.add.reduceat(np.asarray(w, np.float64).ravel(), at)
+    row = at // bins.shape[1]
+    return (s, row, bins.ravel()[at]) if with_bins else (s, row)
+
+
 def _sim(q, r, shift, kind):
     (qb, qv), (rb, rv) = q, _binned(r[0] + shift, r[1])
     _, iq, ir = np.intersect1d(qb, rb, assume_unique=True, return_indices=True)
@@ -82,8 +102,7 @@ def pair_sim(q_mz, q_it, r_mz, r_it, shift=0.0, kind="entropy"):
     if kind == "entropy":
         qw, rw = entropy_p(q_it).astype(np.float64), entropy_p(r_it).astype(np.float64)
     elif kind == "cos":
-        qw = q_it / max(np.linalg.norm(q_it), 1e-12)
-        rw = r_it / max(np.linalg.norm(r_it), 1e-12)
+        qw, rw = q_it, r_it
     else:
         raise ValueError(f"kind={kind!r}")
     qk, rk = qw > 0, rw > 0
@@ -91,6 +110,12 @@ def pair_sim(q_mz, q_it, r_mz, r_it, shift=0.0, kind="entropy"):
         return 0.0
     q = _binned(q_mz[qk], qw[qk])
     r = (r_mz[rk], rw[rk])
+    if kind == "cos":
+        # Unit length after peaks sharing a bin are merged, or a merged pair would
+        # count for more than its share and the cosine could pass 1. The reference is
+        # normalised over its unshifted bins, as the vectorised search does.
+        q = (q[0], q[1] / max(np.linalg.norm(q[1]), 1e-12))
+        r = (r[0], r[1] / max(np.linalg.norm(_binned(*r)[1]), 1e-12))
     s = _sim(q, r, 0.0, kind)
     return max(s, _sim(q, r, float(shift), kind)) if shift else s
 
@@ -101,6 +126,9 @@ CHUNK = 20_000       # reference rows per gather, ~10 MB of float64 per array
 # The test is timsTOF; a relative measured on the same instrument fragments the way the
 # query did, so its spectrum represents the structure when there is one.
 TIMS_LIBS = (b"enveda-180", b"enveda-np-examples")
+# Part of every cache key: lists written by an older search are never read. 2 merges a
+# reference's peaks that share a bin; 1 counted them separately (sims above 1).
+CACHE_VERSION = 2
 
 
 class ShiftIndex:
@@ -153,9 +181,13 @@ class ShiftIndex:
             it = ix["it"][r].astype(np.float32)
             b = np.rint(mz.astype(np.float64) / TOL_DA).astype(np.int32)
             b[(mz == 0) | (b < 0) | (b >= BINS)] = -1
-            c = it / (np.linalg.norm(it, axis=1, keepdims=True) + 1e-12)
+            # Cosine rows stay raw (sqrt) and carry the norm of their bin-merged
+            # peaks, so a merged pair is normalised as one peak (see _gather).
+            merged, row = _runs(b, it)
+            norm = np.sqrt(np.bincount(row, weights=merged ** 2, minlength=len(b)))
             self.side[positive] = {"key": keys[r], "lib": ix["lib"][r], "nm": nm[r],
-                                   "mz": mz, "bin": b, "entropy": entropy_p(it), "cos": c}
+                                   "mz": mz, "bin": b, "entropy": entropy_p(it), "cos": it,
+                                   "cos_norm": np.maximum(norm, 1e-12)}
         self.scratch = np.zeros(BINS + 2)
 
     def rep_lib_of(self, key):
@@ -165,16 +197,27 @@ class ShiftIndex:
                 return bytes(s["lib"][hit[0]])
         return None
 
-    def _gather(self, bins, w, kind):
-        a = np.where(bins >= 0, self.scratch[np.clip(bins, 0, self.bins_n + 1)], 0.0)
+    def _gather(self, bins, w, kind, norm=None):
+        """Per-row similarity against the scattered query.
+
+        30% of positive and 51% of negative representatives hold two or more peaks in
+        one 0.01 Da bin. Each would gather the same query weight, counting it twice and
+        pushing the similarity above 1, so a row's peaks sharing a bin are merged first,
+        as pair_sim does. `norm` is each row's bin-merged length, for cosine.
+        """
+        b, row, rb = _runs(bins, w, with_bins=True)
         if kind == "cos":
-            return (a * w).sum(1)
-        b = w.astype(np.float64)
-        m = (a > 0) & (b > 0)
-        v = np.zeros_like(a)
-        am, bm = a[m], b[m]
-        v[m] = (am + bm) * np.log(am + bm) - am * np.log(am) - bm * np.log(bm)
-        return v.sum(1) / np.log(4.0)
+            b = b / norm[row]
+        ok = rb >= 0
+        a, b, row = self.scratch[rb[ok]], b[ok], row[ok]
+        if kind == "cos":
+            v = a * b
+        else:
+            m = (a > 0) & (b > 0)
+            v = np.zeros_like(a)
+            am, bm = a[m], b[m]
+            v[m] = ((am + bm) * np.log(am + bm) - am * np.log(am) - bm * np.log(bm)) / np.log(4.0)
+        return np.bincount(row, weights=v, minlength=bins.shape[0])
 
     def search(self, spectra, neutral, positive, window=WINDOW, n=N_ANALOGS,
                kind="entropy"):
@@ -195,24 +238,24 @@ class ShiftIndex:
             it = np.asarray(it, np.float64)
             if not len(mz):
                 continue
-            if kind == "entropy":
-                w = entropy_p(it).astype(np.float64)
-            else:
-                w = it / max(np.linalg.norm(it), 1e-12)
+            w = entropy_p(it).astype(np.float64) if kind == "entropy" else it
             qb = np.rint(mz / TOL_DA).astype(np.int64)
             ok = (w > 0) & (qb >= 0) & (qb < self.bins_n)
             if not ok.any():
                 continue
             np.add.at(self.scratch, qb[ok], w[ok])
+            if kind == "cos":                              # unit length after merging
+                u = np.unique(qb[ok])
+                self.scratch[u] /= max(np.sqrt((self.scratch[u] ** 2).sum()), 1e-12)
             for c0 in range(lo, hi, CHUNK):
                 c1 = min(c0 + CHUNK, hi)
-                rw = s[kind][c0:c1]
-                direct = self._gather(s["bin"][c0:c1], rw, kind)
+                rw, norm = s[kind][c0:c1], s["cos_norm"][c0:c1]
+                direct = self._gather(s["bin"][c0:c1], rw, kind, norm)
                 shift = neutral - s["nm"][c0:c1]
                 rmz = s["mz"][c0:c1].astype(np.float64)
                 sb = np.rint((rmz + shift[:, None]) / TOL_DA).astype(np.int64)
                 sb[(rmz == 0) | (sb < 0) | (sb >= self.bins_n)] = -1
-                shifted = self._gather(sb, rw, kind)
+                shifted = self._gather(sb, rw, kind, norm)
                 np.maximum(best[c0 - lo:c1 - lo], np.maximum(direct, shifted),
                            out=best[c0 - lo:c1 - lo])
             self.scratch[qb[ok]] = 0.0                     # clear only what was written
@@ -249,6 +292,7 @@ def cache_path(splits_path, settings, n_index_rows):
         h.update(f.read())
     h.update(repr(sorted(settings.items())).encode())
     h.update(str(int(n_index_rows)).encode())
+    h.update(f"v{CACHE_VERSION}".encode())
     d = f"{library.WORK}/shift_cache"
     os.makedirs(d, exist_ok=True)
     return f"{d}/{h.hexdigest()}.npz"
@@ -288,6 +332,10 @@ def selftest():
         assert s1 == cache_path(f.name, {"n": 80, "win": 200, "sim": "entropy"}, 10)
         assert s1 != cache_path(f.name, {"sim": "cos", "win": 200, "n": 80}, 10)
         assert s1 != cache_path(f.name, {"sim": "entropy", "win": 200, "n": 80}, 11)
+        global CACHE_VERSION
+        CACHE_VERSION += 1
+        assert s1 != cache_path(f.name, {"sim": "entropy", "win": 200, "n": 80}, 10)
+        CACHE_VERSION -= 1
         f.write(b" changed")
         f.flush()
         assert s1 != cache_path(f.name, {"sim": "entropy", "win": 200, "n": 80}, 10)
@@ -322,10 +370,13 @@ def _selftest_index():
             (b"D", b"gnps", False, minus),               # 4: negative mode
             (b"E", b"gnps", True, query),                # 5: banned
             (b"F", b"gnps", True, query),                # 6: unparseable, mass -1
-            (b"G", b"gnps", True, [(100.0, 1.0), (150.0, .8), (330.0, .6), (380.0, .4)])]
+            (b"G", b"gnps", True, [(100.0, 1.0), (150.0, .8), (330.0, .6), (380.0, .4)]),
+            # 8: two peaks in one 0.01 Da bin (150.001, 150.004), as 30-50% of real
+            # representatives have; each must not gather the query's 150.0 separately.
+            (b"H", b"gnps", True, [(100.0, 1.0), (150.001, .6), (150.004, .5), (200.0, .6)])]
     ix = _fake_ix(rows)
     mass = {b"A": mA, b"B": mA - ch2, b"C": mA + 250, b"D": mA - ch2, b"E": mA + 10,
-            b"F": -1.0, b"G": mA + 30}
+            b"F": -1.0, b"G": mA + 30, b"H": mA + 5}
     masses = (np.array(list(mass), "S14"), np.array(list(mass.values())))
     si = ShiftIndex(ix, drop=[0], banned=[b"E"], masses=masses)
     q = spectra_of(ix, [0])
@@ -339,11 +390,13 @@ def _selftest_index():
         assert b"C" not in keys
         assert b"D" not in keys
         # The vectorised search agrees with the one-pair reference implementation.
-        rep_row = {b"B": 1, b"G": 7}
+        rep_row = {b"B": 1, b"G": 7, b"H": 8}
+        assert b"H" in keys, (kind, got)
         for k, v in got:
             r = spectra_of(ix, [rep_row[k]])[0]
             want = pair_sim(q[0][0], q[0][1], r[0], r[1], shift=mA - mass[k], kind=kind)
             assert abs(v - want) < 1e-4, (kind, k, v, want)
+            assert v <= 1.0 + 1e-6, (kind, k, v)
     assert si.rep_lib_of(b"B") == b"enveda-180"
     empty = [(np.zeros(0, np.float32), np.zeros(0, np.float32), 300.0)]
     assert si.search(empty, mA, True) == []
