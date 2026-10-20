@@ -19,6 +19,7 @@ import pandas as pd
 
 MODE = "blend"
 W_SED = 0.5
+SED_ONNX = "sed_fold0_B.onnx"    # pilot A: sed_fold0.onnx
 
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)
@@ -39,7 +40,7 @@ COMP = find("taxonomy.csv")
 CODE = find("sed_infer.py")
 PERCH = find("perch_v2.onnx")
 ASSETS = find("focal_cap30_perch.npz")
-SEDM = find("sed_fold0.onnx")
+SEDM = find(SED_ONNX)
 
 # The ONNX file comes from a public dataset. This is the size of the copy that was
 # checked against Google's SavedModel (embeddings within 3.8e-6).
@@ -65,7 +66,7 @@ from sed_infer import SEDOnnx, blend, rank                          # noqa: E402
 from sklearn.linear_model import LogisticRegression                 # noqa: E402
 from sklearn.preprocessing import StandardScaler                    # noqa: E402
 
-step(f"MODE={MODE} W_SED={W_SED}  torch {torch.__version__}  comp={COMP}  code={CODE}  "
+step(f"MODE={MODE} W_SED={W_SED} SED_ONNX={SED_ONNX}  torch {torch.__version__}  comp={COMP}  code={CODE}  "
      f"sed={SEDM}")
 
 tax = pd.read_csv(f"{COMP}/taxonomy.csv", dtype={"primary_label": str})
@@ -77,7 +78,7 @@ keep = idx[hit]
 assert hit.sum() == 203, hit.sum()
 
 net = Perch(batch=16)
-sed = SEDOnnx(f"{SEDM}/sed_fold0.onnx")
+sed = SEDOnnx(f"{SEDM}/{SED_ONNX}")
 
 
 def read(path):

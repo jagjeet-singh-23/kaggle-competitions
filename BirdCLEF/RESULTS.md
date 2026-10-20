@@ -645,7 +645,7 @@ a strong teacher. Ranked by expected value:
 4. **Re-tune smoothing for Perch.** k and alpha were chosen on BirdNET. Locally,
    smoothing adds +0.0067 on Perch against +0.0077 on BirdNET. Cheap, small.
 
-## 16. SED pilot: no-go with the public pseudo-labels
+## 16. SED pilot: no-go with either teacher
 
 Section 15's item 1, at pilot scale: one fold of an HGNetV2-B0 SED, trained on
 public pseudo-labels, rank-blended with the Perch kernel. The go bar was 0.9318
@@ -718,6 +718,75 @@ only in this private experiment. Kernels:
 Datasets: `birdclef-sed-cache` (07:35 UTC), and `birdclef-kernel-code` and
 `birdclef-sed-models` (08:33 UTC), all on 2026-10-20.
 
+### Phase B: the Perch kernel as teacher, same windows
+
+Phase B changed one thing: the targets of the 12,000 pseudo windows. For each
+class, A's values were re-assigned in the order of the Perch kernel's own scores
+for that class (`teacher.py`, quantile mapping). Prevalence and confidence stay
+A's, and only the ranking changes. Windows, labelled and focal data, fold, seed,
+recipe and W_SED are the pilot's.
+
+| submission | public | private |
+|---|---|---|
+| SED alone, A (public teacher) | 0.87753 | 0.86072 |
+| SED alone, B (Perch teacher) | 0.85621 | 0.87352 |
+| blend w=0.5, A | 0.91718 | 0.91148 |
+| blend w=0.5, B | 0.89834 | 0.91027 |
+
+**No-go, and the teacher is not the main cause.**
+- B's SED alone gains 0.0128 on private but loses 0.0213 on public. The two
+  splits disagree by more than the gain.
+- The B blend is 0.0012 below A on private and 0.0188 below on public. It is still
+  0.017 below Perch alone.
+- The rule's go-bars were +0.02 for SED alone and 0.9318 for the blend. Both were
+  missed.
+- Its third case, "B within 0.01 of A", is missed by 0.003 on private. With public
+  moving the other way, this reads as no teacher effect beyond noise.
+
+Data scale is the next suspect, then the recipe.
+
+**The two teachers order the windows very differently.** Per-class Spearman(A, B)
+over the 12,000 windows:
+
+| | Spearman(A, B) |
+|---|---|
+| q25 / median / q75 | 0.155 / 0.262 / 0.385 |
+| head classes (75) | median 0.389 |
+| zero-shot classes (157) | median 0.203 |
+| cold-start classes (2) | median 0.536 |
+
+The 10 lowest are all zero-shot birds, with ρ from −0.115 to 0.010. The SED was
+trained on two very different orderings of the same windows, and its LB barely
+moved. At this scale, the 12,000 pseudo windows do not decide the SED's score.
+
+**Other details.**
+- Fold-0 validation AUC ended at 0.9729 (A: 0.9697). Both are inflated: the
+  Perch teacher's heads were fit on all labelled files, fold 0 included.
+- The teacher's smoothed scores tie on about 70 of the 12,000 windows per class,
+  never on a whole row. Tied windows share the mean of their A values, so sorted B
+  differs from sorted A by a median of 1.2e-4 and a maximum of 0.057.
+- The teacher reproduces `kernel_perch` to 1.1e-16 on 20 unlabelled files.
+
+**Cost.**
+
+| step | time |
+|---|---|
+| Perch over all 127,104 unlabelled windows, Mac CPU | ~1.5 h (42 ms/window), 43 resumable shards |
+| B targets, including a fresh embed of the 739 labelled windows | a few minutes (not timed) |
+| training, Kaggle T4 | epoch 0 262 s, then ~74 s per epoch, ~28 min in all |
+
+Perch's scores now exist for every unlabelled window, so B targets for all 127,104
+cost minutes, not hours.
+
+| kernel | version | role |
+|---|---|---|
+| `birdclef26-sed-train-b` | v1 | training on B targets |
+| `birdclef26-perch-sed-blend` | v3 | B blend, submission 57441058 |
+| `birdclef26-perch-sed-blend` | v4 | B SED alone, submission 57441268 |
+
+Datasets: `birdclef-sed-targets` (13:18 UTC) and a `birdclef-sed-models` version
+holding both ONNX files (13:54 UTC), on 2026-10-20.
+
 ## 17. Files
 
 ```
@@ -742,9 +811,12 @@ sed_cache.py          int16 pilot cache: pseudo, labelled, focal windows
 sed_train.py          one SED fold on Kaggle GPU
 sed_infer.py          SED on CPU via ONNX Runtime; rank blend
 kernel_sed_train/     SED training kernel
-kernel_blend/         Perch + SED kernel                 0.91148 private (no-go)
+teacher.py            kernel_perch as functions; Perch over unlabelled; B targets
+kernel_sed_train_b/   SED training kernel on B targets
+kernel_blend/         Perch + SED kernel                 0.91148 / 0.91027 private (no-go)
 ```
 
 Self-checks that need no competition data: `python3 rung1c.py --selftest`,
 `python3 smooth.py --selftest`, `python3 head.py --selftest`, `python3 sed_model.py --selftest`,
-`python3 sed_train.py --selftest`.
+`python3 sed_train.py --selftest`. `python3 teacher.py --selftest` needs the competition
+data and the Perch ONNX.
