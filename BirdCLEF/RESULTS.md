@@ -4,13 +4,14 @@ Identifying 234 species from 5-second windows of passive acoustic monitoring in 
 Brazilian Pantanal. Metric is macro-averaged ROC-AUC over classes with at least one
 true positive. Competition closed June 2026; winner 0.96574.
 
-**Private leaderboard 0.87008**, from a linear head on frozen BirdNET embeddings,
-blended with BirdNET's own logits on the species it knows, cold-start heads on focal
-audio for the 30 classes that have neither, and temporal smoothing across the windows
-of each recording.
+**Private leaderboard 0.92681**, from a linear head on frozen Perch v2 embeddings and
+logits, blended with Perch's own logits on the 203 classes it knows, cold-start heads
+on focal audio for the 2 classes that have neither, and temporal smoothing across the
+windows of each recording (section 14). The same pipeline on BirdNET scored 0.87008.
 
-All numbers below are 5-fold cross-validation over the 739 labelled soundscape
-segments, grouped by recording file. Nothing here has been submitted.
+Unless a table says public or private, a number is 5-fold cross-validation over the
+739 labelled soundscape segments, grouped by recording file. Section 13 explains why
+numbers before it moved by up to 0.02 between machines.
 
 ---
 
@@ -35,6 +36,9 @@ out to explain almost every result on this page.
 
 The head is one-vs-rest logistic regression, `C=0.01`, `class_weight="balanced"`,
 on 1,024-dim embeddings with 739 rows. Heavily regularised on purpose.
+
+*Correction: rows 4 and 5 were inflated or deflated by how `rank()` broke ties. With
+ties averaged they are 0.8769 and 0.8794. Section 13 explains.*
 
 ## 3. The finding that mattered: the embeddings are not bird-specific
 
@@ -65,6 +69,10 @@ prediction is pure dilution: 0.8553 → 0.7451.
 
 Restricting the blend to the 28 bird columns keeps the gain where it is real
 (0.9098 → 0.9156) and leaves the rest alone. That is the 0.8881.
+
+*Correction: the dilution above was not real. argsort ranked BirdNET's constant
+column as a ramp in row order, so the blend mixed in noise. With ties averaged,
+blending everywhere costs 0.0025, not 0.078 (section 13).*
 
 ## 5. Negative result: 333 hours of focal audio did not help
 
@@ -451,40 +459,212 @@ features alone worked — one gave a prediction to classes that had none, the ot
 used structure in the output space. The frozen representation is the ceiling, and the
 only thing that lifts it is fine-tuning, which is unavailable here.
 
-## 13. Where this stands and what is next
+*That conclusion was about one representation. Section 14 swaps BirdNET for Perch v2,
+still frozen, and the ceiling moves.*
 
-Rung 1b, 0.8881, is the current best and has **not been submitted** — there is no
-inference kernel yet, and the competition's binding constraint is a CPU-only notebook
-under 90 minutes with no internet. BirdNET at 24 ms per 3-second chunk against the
-hidden test set is the thing that has to be measured before any of this is a score.
+## 13. The local CV was not platform-independent
 
-Ranked by expected value, with the arithmetic from section 7:
+Moving from the Linux machine (x86, numpy 2.2) to a Mac mini (ARM, numpy 2.5)
+reproduced zero-shot exactly, 0.6168, but not the head:
 
-1. ~~Train the 30 constant classes on focal audio.~~ **Done, section 8: +0.021
-   private.** The remaining headroom in that cohort is real but smaller — they are at
-   ~0.667 on private against ~0.885 for the rest.
-2. ~~Pseudo-label the 10,592 unlabelled soundscape files.~~ **Done, section 9:
-   about +0.004, and weakly supported.** The in-domain data is real but a linear
-   probe on frozen features cannot extract much more from it than BirdNET already
-   provides. This is an argument for fine-tuning, not against the data.
-2. **Energy-based window selection.** `starts_for()` spreads windows uniformly; 12% of
-   clips run past a minute with the call anywhere in them. This is the most likely
-   source of label noise in the focal set — and worth retrying section 5 after fixing,
-   since a cleaner focal set is the one thing that might change that result.
-4. ~~Fine-tune BirdNET rather than freezing it.~~ **Not available, section 10.** The
-   model ships as inference-only `.tflite`, upstream publishes no bare trainable
-   checkpoint, and there is no GPU or TensorFlow here.
+| | Linux | Mac |
+|---|---|---|
+| head on emb+logits | 0.8774 | 0.8755 |
+| head + zero-shot, birds only | **0.8881** | **0.8684** |
 
-## 14. Files
+The audio and the model were the same. Both differences come from how a sort breaks
+ties, which numpy does differently on the two architectures.
+
+**`rank()` broke ties in sort order.** In cross-validation a class absent from a
+training fold predicts a 0.5 constant for that whole fold. That is 29 of the 75 scored
+columns and 4,278 rows. `argsort(argsort())` gives those tied rows distinct ranks in
+whatever order the sort leaves them, and AUC then scores that order as if it were a
+prediction. Ranking must not change AUC; on the Mac it did:
+
+| | AUC |
+|---|---|
+| raw head | 0.8755 |
+| rank by argsort | 0.8655 |
+| rank with ties averaged | 0.8755 |
+| blend, argsort ranks, Mac / Linux | 0.8684 / 0.8881 |
+| blend, ties averaged | **0.8794** |
+| blend, 50 random tie orders | 0.8762 – 0.8818 |
+
+Linux's 0.8881 sits above every random tie order and the Mac's 0.8684 below every one.
+Neither is a measurement of the model. Two claims in this file were the same artifact:
+
+- Section 4's "others 0.8593 → 0.8717 from rank normalisation". Rank normalisation
+  cannot move AUC, and with ties averaged it does not.
+- Section 4's "blending a constant is pure dilution" (0.8100). argsort turns a
+  constant column into a ramp in row order, so the blend was mixing in noise, not a
+  constant. With ties averaged, blending everywhere scores 0.8769 against 0.8794 for
+  birds only. The restriction still helps, by 0.0025 rather than by 0.078.
+
+The leaderboard numbers stand. At test time every head is fitted on all 739 rows, so
+there are no fold constants and nothing to tie.
+
+**GroupKFold's default folds depend on the platform too.** 59 of the 66 labelled files
+have exactly 12 segments. GroupKFold assigns groups in size order, so the assignment
+is decided by an unstable argsort over ties. Across 20 equally valid tie-breaks the
+head scores 0.8643–0.8888, sd 0.0064. That spread is wider than several effects
+reported above, including section 9's +0.004.
+
+Fixes:
+- `head.rank` uses `rankdata`, and `head.py --selftest` asserts that ranking leaves
+  AUC unchanged.
+- New comparisons run on 10 seeded shuffles (`GroupKFold(shuffle=True)`) and are
+  paired on identical folds.
+- `smooth.py`, `pseudo.py`, `rung1c.py` and `coldstart.py` still rank by argsort.
+  Their local numbers carry the artifact; only the deltas confirmed on the
+  leaderboard (smoothing) are trustworthy.
+
+**A smaller bug in the same area.** `rung1c.focal_subsample` measured its cap in
+appended shard chunks, not rows. "30 per class" gave 17 classes more than 30 rows,
+up to 59, so `focal_cap30.npz` holds 6,271 rows where at most 6,180 were intended.
+
+## 14. Perch v2: the ceiling was BirdNET's
+
+The CLEF 2026 working notes contain the controlled comparison this repo never ran. The
+same ridge probe on frozen embeddings scored 0.798 private on BirdNET and 0.862 on
+Perch v2 (DS@GT, Table 6). `perch_head.py` reruns kernel v4's pipeline with only the
+encoder changed.
+
+**The model.** Perch v2 takes exactly one competition window, 5 s at 32 kHz, so there
+is no resampling and no two-chunk fold. It returns a 1,536-dim embedding and 14,795
+logits. The ONNX export used (`perch.py`) was checked against Google's SavedModel
+on 12 windows of a labelled soundscape:
+
+- embeddings matched within 3.8e-6 and logits within 9e-5;
+- the top-20 logits were identical on every window;
+- it runs at 42–48 ms per window on an M4, against 150 ms for TensorFlow;
+- the CoreML provider was ten times slower and drifted by up to 0.19 in the logits.
+
+**Coverage.** Perch has exact scientific-name matches for 203 of the 234 classes: all
+162 birds, 32 of 35 amphibians, 6 of 8 mammals and 3 of 28 insects. BirdNET matched
+157, all birds.
+
+| 10 seeds, paired | BirdNET | Perch v2 |
+|---|---|---|
+| zero-shot | 0.6168 | 0.7367 |
+| head on emb+logits | 0.8762 | 0.8838 |
+| + zero-shot blend on mapped columns | 0.8803 | 0.9077 |
+| **+ smoothing (kernel v4)** | **0.8880** | **0.9144** |
+
+At the kernel-v4 stage Perch gains **+0.0264**. It wins all 10 seeds and 52 of 75
+classes, at 2.9σ over classes.
+
+The gain does not come from the embedding. A head on Perch's embedding beats one on
+BirdNET's by only +0.008, at 1.0σ. It comes from Perch's own classifier:
+
+- On the 28 birds both models know, zero-shot rises from 0.8128 to 0.9005.
+- On the 18 labelled classes only Perch knows, zero-shot scores 0.8631, where
+  BirdNET's constant scores 0.5.
+
+That is also where the leaderboard should gain most, because local CV cannot see it:
+
+| route, all 234 classes | BirdNET | Perch |
+|---|---|---|
+| mapped + labelled: head + blend | 28 | 46 |
+| mapped, unlabelled: zero-shot | 129 | 157 |
+| unmapped + labelled: head only | 47 | 29 |
+| unmapped, unlabelled: cold-start | 30 | 2 |
+
+28 of the 30 cold-start classes now have a Perch column: 17 amphibians, 5 birds,
+3 insects and 3 mammals. On private, the cold-start heads they replace scored about
+0.667. Two classes still need a cold-start head: Uruguay Harlequin Frog (5 clips) and
+Black-tailed Marmoset (3 clips).
+
+### The kernel
+
+`kernel_perch/birdclef_perch_submit.py` is kernel v4 with the encoder swapped. Ranks
+are tie-aware. The cold-start pool is re-embedded with Perch by
+`embed_focal_perch.py`: the same windows recipe and a true cap of 30, giving 5,802
+windows in 7 minutes. On Kaggle's CPU Perch runs at 202 ms per window, so about 600
+test files take 24 minutes and the whole kernel about 35.
+
+Two deployment surprises:
+
+- **The Kaggle image moved to Python 3.13.** The ONNX dataset's `onnxruntime` wheel
+  is cp312, so the first run failed. The assets dataset now ships the cp313 wheel, and
+  pip picks whichever wheel fits. Kernel v4's `ai-edge-litert` wheel is also cp312, so
+  re-running v4 today would fail the same way.
+- **The Kaggle CLI names its upload state file after the full source path.** From a
+  long directory that name passes macOS's 255-character limit and the upload aborts
+  part-way. Stage uploads from a short path.
+
+### Submitted
+
+| | public | private |
+|---|---|---|
+| v1 BirdNET head + zero-shot | 0.83593 | 0.83575 |
+| v3 + cold-start heads | 0.86983 | 0.85710 |
+| v4 + smoothing | 0.88572 | 0.87008 |
+| **Perch v1: v4 on Perch v2** | **0.92423** | **0.92681** |
+| gain over v4 | +0.03851 | **+0.05673** |
+
+The leaderboard gain is more than twice the local one, +0.057 against +0.026. Local
+CV only scores the 75 labelled classes. The rest of the gain sits in the 157
+zero-shot classes and the 28 former cold-start classes, which local CV cannot see.
+This time the estimate from the routes table pointed the right way and the 75-class
+number undersold it.
+
+Private is now above public. Since v3 the order had been reversed, with a gap of
+0.013–0.016, and section 8 attributed that gap to the cold-start heads. Removing 28
+of the 30 removed it.
+
+For scale:
+
+| | private |
+|---|---|
+| DS@GT, frozen Perch v2 + MLP probes | 0.918 |
+| this kernel, one frozen model, no GPU | **0.927** |
+| public Perch/ProtoSSM pipeline, forked by hundreds | ~0.940 |
+| 13th place, six CNNs + Perch | 0.955 |
+| winner | 0.96574 |
+
+## 15. Where this stands and what is next
+
+The remaining gap to the top is about 0.04. Every team above 0.95 used one of these:
+a trained spectrogram CNN, a temporal head over the 12 windows, or pseudo-labels from
+a strong teacher. Ranked by expected value:
+
+1. **A spectrogram CNN/SED branch blended with Perch.** This is the step to 0.95.
+   DS@GT reached 0.920 with the Perch probe alone and 0.917 with HGNetV2-B0 SED
+   alone; the blend scored 0.929. 13th place blended six CNNs (0.953) with Perch and
+   reached 0.955. It needs GPU training, either on Kaggle or on the Mac's MPS. Section
+   10's "fine-tuning unavailable" applied to BirdNET's `.tflite`, not to training a
+   CNN from scratch.
+2. **Pseudo-labels from this kernel.** At 0.927 it is now a strong teacher. Section 9
+   failed with a 0.87-class teacher, and 13th place saw the same: a weak self-teacher
+   lowered their CNN from 0.881 to 0.864, while strong labels raised it to 0.934. The
+   pseudo-labels matter most as training data for item 1. For a linear head on frozen
+   features, a late entrant's study found them redundant.
+3. **A temporal head over the 12 windows (ProtoSSM).** Public pipelines use one.
+   Paper 348's ablation credits temporal aggregation with only +0.0013, and the max
+   smoother already captures most of it. Small.
+4. **Re-tune smoothing for Perch.** k and alpha were chosen on BirdNET. Locally,
+   smoothing adds +0.0067 on Perch against +0.0077 on BirdNET. Cheap, small.
+
+## 16. Files
 
 ```
-birdnet.py          BirdNET V2.4 wrapper; logits + penultimate embedding
-embed_labelled.py   739 labelled soundscape segments  -> data/labelled.npz
-embed_train.py      131,943 focal segments, sharded   -> data/emb_train/
-cv.py               macro ROC-AUC, zero-shot baseline
-head.py             Rung 1b: linear head + blends          0.8881
-rung1c.py           Rung 1c: focal + soundscape            0.8265  (negative)
-kernel/rung0.py     submission kernel skeleton
+birdnet.py            BirdNET V2.4 wrapper; logits + penultimate embedding
+perch.py              Perch v2 ONNX wrapper; logits + embedding, verified vs SavedModel
+embed_labelled.py     739 labelled soundscape segments  -> data/labelled.npz
+embed_train.py        131,943 focal segments, sharded   -> data/emb_train/
+embed_focal_perch.py  Perch focal pool, 30 per class    -> data/focal_cap30_perch.npz
+cv.py                 macro ROC-AUC, zero-shot baseline
+head.py               linear head + blends; tie-aware rank()
+perch_head.py         BirdNET vs Perch, 10 seeds paired  0.8880 -> 0.9144
+rung1c.py             focal + soundscape                 (negative)
+coldstart.py          cold-start heads on focal audio
+pseudo.py             pseudo-labelling unlabelled soundscapes
+mlp.py                nonlinear heads                    (negative)
+smooth.py             temporal smoothing sweep
+mixup.py, mixeval.py  focal calls mixed into soundscapes (negative)
+kernel/               BirdNET kernel, v1-v4              0.87008 private
+kernel_perch/         Perch kernel                       0.92681 private
 ```
 
-Self-checks that need no competition data: `python3 rung1c.py --selftest`.
+Self-checks that need no competition data: `python3 rung1c.py --selftest`,
+`python3 smooth.py --selftest`, `python3 head.py --selftest`.

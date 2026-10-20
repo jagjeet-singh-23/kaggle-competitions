@@ -14,6 +14,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
@@ -50,8 +51,12 @@ def cross_val(X, Y, groups):
 
 def rank(P):
     """Per-class rank normalisation. AUC only sees the order within a column, so this
-    changes nothing on its own, but it puts columns on one scale before blending."""
-    return np.argsort(np.argsort(P, axis=0), axis=0) / max(1, len(P) - 1)
+    changes nothing on its own, but it puts columns on one scale before blending.
+
+    Ties get their average rank. argsort-of-argsort broke them in whatever order the
+    platform's sort produced, which is not the same on x86 and ARM and moved the local
+    blend score by 0.02 between the two (see selftest)."""
+    return (rankdata(P, axis=0) - 1) / max(1, len(P) - 1)
 
 
 def main():
@@ -91,5 +96,24 @@ def main():
     assert macro_auc(Y, best[1]) >= base.mean()
 
 
+def selftest():
+    """rank() must not change AUC, ties included.
+
+    In cross-validation a class absent from a training fold predicts a 0.5 constant
+    for that fold, so 29 of the 75 scored columns hold long runs of ties. Breaking
+    them by argsort order moved the blend from 0.8881 (Linux) to 0.8684 (Mac).
+    """
+    rng = np.random.default_rng(0)
+    y = (rng.random(200) < 0.1).astype(float)
+    p = rng.random(200)
+    p[:120] = 0.5                         # a fold that never saw the class
+    P, Yc = np.column_stack([p, p[::-1]]), np.column_stack([y, y[::-1]])
+    assert np.isclose(macro_auc(Yc, rank(P)), macro_auc(Yc, P)), "rank() moved the AUC"
+    r = rank(P)
+    assert r.min() >= 0 and r.max() <= 1, "ranks must stay on a [0, 1] scale"
+    print("head self-checks passed")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    selftest() if "--selftest" in sys.argv else main()

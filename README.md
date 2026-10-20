@@ -49,7 +49,7 @@ models.py     GBM / NuSVR / Ridge, log-target and blend wrappers         CV 2.03
 
 ---
 
-## [BirdCLEF+ 2026](BirdCLEF/) — submitted, 0.87008
+## [BirdCLEF+ 2026](BirdCLEF/) — submitted, 0.92681
 
 Identifying 234 species (birds, amphibians, mammals, reptiles, insects) from 5-second
 windows of passive acoustic monitoring in the Brazilian Pantanal. Closed June 2026.
@@ -58,10 +58,10 @@ windows of passive acoustic monitoring in the Brazilian Pantanal. Closed June 20
 
 | | |
 |---|---|
-| Private LB | **0.87008** |
+| Private LB, Perch v2 kernel | **0.92681** |
+| Private LB, same pipeline on BirdNET | 0.87008 |
 | First submission | 0.83575 |
-| Local CV (75 of 234 classes) | 0.8881 |
-| Zero-shot BirdNET | 0.6168 |
+| Local CV, 75 of 234 classes, Perch vs BirdNET | 0.9144 vs 0.8880 |
 | Competition winner | 0.96574 |
 | Metric | macro-averaged ROC-AUC, skipping classes with no true positives |
 | Constraint | **CPU notebook ≤ 90 minutes, GPU disabled, no internet** |
@@ -71,14 +71,32 @@ The dataset fact that shapes everything: `taxonomy.csv` defines 234 classes,
 25 insect sonotypes and 3 amphibians. 72 non-bird classes are 31% of a macro-averaged
 metric and share 750 focal clips, while 162 bird classes have 34,799.
 
-Two findings worth the click:
+Seven levers were tried on BirdNET after the first submission, then the encoder was
+swapped:
 
-- **BirdNET's embeddings are not bird-specific, its classifier is.** Zero-shot, the 72
-  non-bird classes score exactly 0.5000 — they have no output column. A linear probe
-  on the penultimate layer takes them to **0.8553**, close to what the same probe gets
-  on birds. That removes the need for the separate non-bird detector the analysis had
-  called for. Blending the logits back in helps only on the 28 bird columns; doing it
-  everywhere *costs* 0.066, because rank-averaging a constant is dilution.
+| lever | result |
+|---|---|
+| 333 h focal audio, where labels already existed | −0.05 |
+| focal audio for the 30 classes that had none | **+0.021** |
+| 177 h in-domain pseudo-labels | +0.004, 1.6σ |
+| nonlinear head, 24 configurations | 24/24 below linear |
+| all 6,522 BirdNET logits instead of 157 | −0.012 |
+| temporal smoothing across a recording | **+0.013** |
+| focal calls mixed into soundscape backgrounds | ±0.000 |
+| **Perch v2 in place of BirdNET, frozen, everything else unchanged** | **+0.057** |
+
+Three findings worth the click:
+
+- **The ceiling was BirdNET's, not the frozen encoder's.** Every attack on BirdNET's
+  features failed, which looked like a ceiling only fine-tuning could lift. Swapping
+  in Perch v2, still frozen, added +0.057 private. Its classifier knows 203 of the 234
+  classes, against BirdNET's 157, so classes with no prediction route fell from 30 to
+  2. The gain came from Perch's logits: a head on its embedding alone beats BirdNET's
+  by only +0.008.
+- **The local CV moved by 0.02 between machines.** Ranking with `argsort(argsort())`
+  broke ties among fold-constant predictions in whatever order the platform's sort
+  left them. The same blend scored 0.8881 on x86 and 0.8684 on ARM; with ties averaged
+  it is 0.8794 on both. The leaderboard was never affected.
 - **333 hours of focal audio made it worse.** Four hours of extraction, 131,943
   segments, every configuration below the 0.8756 you get by ignoring it — and the
   sweep is monotone toward discarding it. The loss is concentrated on birds
@@ -114,27 +132,6 @@ Class 3 is 0 *by construction* and cannot be otherwise — the structure is bann
 the candidate list, so no retrieval method reaches it. Class 2 was 0 for the same
 reason until analog propagation: score a candidate by how similar it is to the
 best-matching structure that *does* have spectra, inside a 5 ppm neutral-mass window.
-
-Six levers were tried after the first submission. The pattern in what worked is the
-finding:
-
-| lever | result |
-|---|---|
-| 333 h focal audio, where labels already existed | −0.05 |
-| focal audio for the 30 classes that had none | **+0.021** |
-| 177 h in-domain pseudo-labels | +0.004, 1.6σ |
-| nonlinear head, 24 configurations | 24/24 below linear |
-| all 6,522 BirdNET logits instead of 157 | −0.012 |
-| temporal smoothing across a recording | **+0.013** |
-| focal calls mixed into soundscape backgrounds | ±0.000 |
-
-Every attack on the *features* failed; both changes that left the features alone
-worked. One gives a prediction to classes that had none, the other exploits structure
-in the output space. A nonlinear head loses at every width, and the deficit shrinks
-monotonically as it widens — a bigger trunk is re-learning the linear solution from
-below, not finding anything new. The frozen representation is the ceiling, and
-fine-tuning past it is unavailable: BirdNET ships as inference-only `.tflite`,
-upstream publishes no bare trainable checkpoint, and there is no GPU here.
 
 Three findings worth the click:
 
