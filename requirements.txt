@@ -14,6 +14,12 @@ lightgbm==4.7.0
 # BirdCLEF only. ai-edge-litert has NO Intel-Mac wheel -- Apple Silicon or Linux.
 soundfile==0.14.0
 ai-edge-litert==2.2.0
+# BirdCLEF Perch and SED branches (installed on the Mac mini, Python 3.12).
+onnxruntime==1.24.4
+torch==2.14.1
+timm==1.0.30
+onnx==1.23.2
+onnxscript==0.7.2
 
 # MoleculeID only. Pinned exactly: the competition metric is an InChIKey comparison
 # after tautomer canonicalisation, and that is RDKit-version-dependent. A different
