@@ -11,6 +11,7 @@ train.parquet, which costs about 50 minutes of the 9 hours:
     canonical_keys()     RDKit key14 per structure          ~20 min
     analog.build()       Morgan fingerprint + exact mass    ~2 min
     analog.submit()      search + propagate over 400 mols   ~1 min
+    shifted analogs      ±200 Da relatives, SHIFT_W > 0     ~6 min on the Mac
 
 Derived artifacts go to /tmp, not /kaggle/working: the index alone is 1.3 GB and
 would otherwise be committed as notebook output.
@@ -77,6 +78,12 @@ os.environ["PRIOR"] = "syn"
 os.environ["PRIOR_W"] = "0.5"
 os.environ["PRIOR_GATE"] = "0.8"
 os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
+# Mass-shifted analogs (RESULTS.md section 32): spectral relatives within ±200 Da re-rank
+# the pool, SHIFT_W * max_a sim_a^3 * tanimoto(c, a). 0 is v15; the held-out sweep peaks
+# at 16 with entropy similarity. fpsearch reads these at import.
+os.environ["SHIFT_W"] = "0"
+os.environ["SHIFT_P"] = "3"
+os.environ["SHIFT_SIM"] = "entropy"
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -136,6 +143,7 @@ fpsearch.submit("/kaggle/working/submission.csv")
 import prior                             # noqa: E402
 step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'}, "
      f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g}, "
+     f"shift w={fpsearch.SHIFT_W:g} p={fpsearch.SHIFT_P:g} {fpsearch.SHIFT_SIM}, "
      f"{len(fingerprint.MODEL.split(','))} fingerprint models)")
 
 import pandas as pd                      # noqa: E402

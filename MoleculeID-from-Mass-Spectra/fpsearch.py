@@ -17,6 +17,7 @@ the MRR below is fiction.
 """
 import os
 import sys
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -24,6 +25,7 @@ import torch
 
 import library
 import prior
+import shifted
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
 from fingerprint import Net, NBIN, BIN, predict
@@ -41,6 +43,11 @@ GAMMAS = tuple(float(x) for x in os.environ.get("GAMMAS", "0,4,8,16,32,64").spli
 # t / std(t), "z" (t - mean) / std, "rank" the percentile in the pool; "" leaves t raw
 # (v12). A std-normalised gamma of 2.62 weighs the v12-style model as raw 32 does.
 FP_NORM = os.environ.get("FP_NORM", "")
+# SHIFT_W weighs the mass-shifted analog term in submit(): relatives within ±200 Da,
+# SHIFT_W * max_a sim_a^SHIFT_P * tanimoto(c, a) (RESULTS.md section 32). 0 leaves it out.
+SHIFT_W = float(os.environ.get("SHIFT_W", 0.0))
+SHIFT_P = float(os.environ.get("SHIFT_P", 3.0))
+SHIFT_SIM = os.environ.get("SHIFT_SIM", "entropy")
 
 
 def normalise(t, how=FP_NORM):
@@ -219,11 +226,12 @@ def submit(path=None, gamma=GAMMA):
     te = pd.read_parquet(f"{DATA}/test.parquet")
     ix = library.load()
     se = Searcher(ix=ix)
+    si = shifted.ShiftIndex(ix) if SHIFT_W else None
     del ix                       # Searcher keeps its own masked copy; see main()
     an = Analog()
     model, bits = load_model()
     prior_of = prior.load() if prior.W else {}
-    rows = []
+    rows, shift_s = [], 0.0
     for mid, g in te.groupby("molecule_id"):
         spectra = [library.trim(a, b, p) + (p,)
                    for a, b, p in zip(g.ms2_mzs, g.ms2_normalized_intensities,
@@ -250,6 +258,19 @@ def submit(path=None, gamma=GAMMA):
                 k = an.key[r]
                 total[k] = total.get(k, 0.0) + gamma * float(v)
                 sm.setdefault(k, an.smiles[r])
+        if si is not None and len(pool):
+            t0 = time.time()
+            shift, positive = ADDUCTS[add[0]]
+            rel = [(an.row[a], s) for a, s in si.search(spectra, pm - shift, positive,
+                                                        kind=SHIFT_SIM) if a in an.row]
+            if rel:
+                t = shifted.analog_term(an.fp[pool], an.fp[np.array([r for r, _ in rel])],
+                                        np.array([s for _, s in rel]), SHIFT_P)
+                for r, v in zip(pool, t):
+                    k = an.key[r]
+                    total[k] = total.get(k, 0.0) + SHIFT_W * float(v)
+                    sm.setdefault(k, an.smiles[r])
+            shift_s += time.time() - t0
         if prior_of and max(spec.values(), default=0.0) / len(spectra) < prior.GATE:
             for k in total:
                 total[k] += prior.W * prior_of.get(k, prior.FILL)
@@ -261,6 +282,9 @@ def submit(path=None, gamma=GAMMA):
     sub.to_csv(path, index=False)
     print(f"wrote {path}: {len(sub)} molecules, "
           f"{sub.smiles.str.split(';').str.len().mean():.1f} candidates each")
+    if si is not None:
+        print(f"shifted analogs: weight {SHIFT_W:g}, p {SHIFT_P:g}, {SHIFT_SIM}, "
+              f"search {shift_s:.0f} s over {len(sub)} molecules")
 
 
 if __name__ == "__main__":
