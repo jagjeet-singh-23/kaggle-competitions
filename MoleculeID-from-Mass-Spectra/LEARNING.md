@@ -145,3 +145,66 @@ wahi kaam ka kuch hissa kar rahe hain, isliye bacha hua gain chhota hai (ye anda
 faayda sirf channel pe nahi, is pe bhi tay hota hai ki baaki pipeline pehle se kya kar raha hai. Agla bada sawaal:
 non-env ke 237 answers jo top 25 me hain hi nahi, unme se 226 pool me hi nahi hain. Unke liye ranker ya re-ranking
 kaam nahi aayega; wahan pool chahiye, aur pool badhana teen baar LB pe haara hai (§31).
+
+## 3. Kya held-out ka gain LB tak pahuncha? (2026-10-20)
+
+**Sawaal.** v17 = v15 + shifted analogs (`SHIFT_W=16`, entropy, p 3). v15 0.257 pe hai. Held-out se do LB andaze
+bante hain. Plan ka formula ordinary split ka non-env class 3 leta hai, jahan coverage 76/302 = 0.25 hai: +0.011.
+Coverage-scaled rule covered split ke delta ko 0.12 se guna karta hai: +0.0035. Kaunsa sahi hai?
+
+**Andaza (pehle se likha, entry 2).** 0.260–0.262 coverage-scaled, 0.268 plan ke formula se. Sirf ≥ 0.262 kuch
+kehta hai.
+
+**Measured.** v17 **0.264** (submission 57439024), yaani v15 se **+0.007**. Rounding ke saath ye +0.006 se +0.008
+ke beech hai.
+
+| model | Δ andaza | LB andaza | asli − andaza |
+|---|---|---|---|
+| coverage-scaled (covered delta × 0.12) | +0.0035 | 0.2605 | +0.0035 |
+| beech wala (non-env ke 76 covered answers, coverage 0.12) | +0.005 | 0.262 | +0.002 |
+| plan ka formula (non-env, coverage 0.25) | +0.011 | 0.268 | −0.004 |
+| **asli** | **+0.007** | **0.264** | |
+
+**Andaze se fark.** Asli number dono models ke beech gira, aur dono se ek LB-noise (±0.003–0.005) ke andar hai.
+Isliye LB kisi bhi model ko galat sabit nahi karta.
+
+**Coverage ulta nikaalo.** Plan ke formula me class 1 aur 2 ka hissa lagbhag zero hai (−0.0005 + 0.0004). To class 3
+ka asli gain ≈ (0.007 + 0.0002) / 0.735 = **+0.0098**. Ab dekho kitne coverage pe ye gain aata:
+- Non-env ke har covered answer pe gain +0.060 tha (0.0152 × 302/76). Is hisaab se hidden coverage ≈ **0.16**.
+- `splits_big` ke covered gain (+0.0415) ke hisaab se ≈ **0.24**.
+- LB ka ±0.004 noise jodo to pehla 0.07–0.25 ho jaata hai aur dusra 0.11–0.37.
+
+Dono point estimates 0.12 se upar jhukte hain. HANDOFF pehle se kehta tha ki asli coverage shayad 12.4% se kuch zyada
+hai, kyunki wo number leaky model se aaya tha. Lekin ek LB point coverage ka sawaal tay nahi karta: 0.12 galat
+sabit nahi hua, bas thoda kam lagta hai.
+
+**Ye probe kya keh sakta tha aur kya nahi.** Do models ke andaze 0.0075 alag the, aur noise ±0.004 hai. Aisa probe
+tabhi faisla deta jab result kisi kinare pe girta: ≤ 0.259 hota to coverage-scaled sahi, ≥ 0.269 hota to plan ka
+formula. Beech me girne pe sirf itna pata chalta hai ki channel ka asar positive hai. Coverage ko sach me test karna
+ho to aisa change chahiye jahan dono models ke andaze noise ke 3–4 guna alag hon.
+
+**Jo pakka hua.**
+- Gain noise ka ~1.5–2 guna hai, aur ≥ 0.262 wali pehle se likhi shart paar hui.
+- v12 (+0.016) ke baad ye pehla LB step hai jo noise se bahar hai. v14 (+0.002) aur v15 (+0.003) noise ke andar the.
+  v13 (−0.007) aur v16 (−0.014) held-out pe jeete the aur LB pe ulte gire.
+
+**Kyun transfer hua (andaza, teen cases pe, rule nahi).** v13 ne global scoring badla (normalisation, tau). v16 ne
+pool badla. Dono me har molecule ke har candidate ka score hila. Shifted term pool ko nahi chhoota, aur sirf un
+molecules ko hilata hai jinka sach me ek spectral rishtedaar hai (entry 2: bina rishtedaar wale ~0 hile). Mera
+andaza hai ki jo change kam molecules ko, ek khaas wajah se, chhoota hai, uska held-out → LB transfer zyada
+bharosemand hota hai.
+
+**Ek side observation.** Scoring ~2.5 ghante chala (18:36 → ~21:00), jabki v15 ka ~70 min tha aur v17 ka commit run
+84 min ka. Naya kharcha sirf shifted search hai, jo spectra ki ginti ke saath badhta hai. To shayad hidden test me
+placeholder se zyada spectra hain, ya Kaggle ki queue thi. Ye naapa nahi hai. 9 ghante ki limit abhi door hai, lekin
+component 2–4 jo bhi time jodenge, wo ~2.5 ghante pe judega, 84 min pe nahi.
+
+**Belief jo badli.** HANDOFF ka rule kehta tha ki same pool ke andar ranking ka kaam LB pe mushkil se dikhega, kyunki
+ship ke liye covered quality pe +0.057 chahiye. Is channel ne covered pe +0.0415 diya aur LB pe phir bhi +0.007.
+Ranking ka kaam LB pe dikh sakta hai, khaas kar jab wo sirf sahi molecules ko chhoota ho.
+
+Component 2 (ranker) ke liye ye achha sanket hai, lekin usme wahi khatra bhi hai: ranker har candidate ka score
+badlega, bilkul v13 ki tarah. Uska LB andaza dono models se banana aur noise ke saath padhna hoga.
+
+**Final selection.** Pehle se likhi shart (≥ 0.262) ke hisaab se v17 final selection me jaata hai. Sujhaav: v17
+pehla, v15 dusra. v15 bina channel wala hedge hai, agar private split pe channel ka asar ulta nikle.

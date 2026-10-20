@@ -11,7 +11,7 @@ train.parquet, which costs about 50 minutes of the 9 hours:
     canonical_keys()     RDKit key14 per structure          ~20 min
     analog.build()       Morgan fingerprint + exact mass    ~2 min
     analog.submit()      search + propagate over 400 mols   ~1 min
-    shifted analogs      ±200 Da relatives, SHIFT_W > 0     ~6 min on the Mac
+    shifted analogs      ±200 Da relatives, SHIFT_W > 0     ~20 min (6 on the Mac)
 
 Derived artifacts go to /tmp, not /kaggle/working: the index alone is 1.3 GB and
 would otherwise be committed as notebook output.
@@ -80,8 +80,9 @@ os.environ["PRIOR_GATE"] = "0.8"
 os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
 # Mass-shifted analogs (RESULTS.md section 32): spectral relatives within ±200 Da re-rank
 # the pool, SHIFT_W * max_a sim_a^3 * tanimoto(c, a). 0 is v15; the held-out sweep peaks
-# at 16 with entropy similarity. fpsearch reads these at import.
-os.environ["SHIFT_W"] = "0"
+# at 16 with entropy similarity. fpsearch reads these at import. v17 is a learning probe
+# at 16 (predicted 0.260-0.262 against v15's 0.257; LEARNING.md entry 2).
+os.environ["SHIFT_W"] = "16"
 os.environ["SHIFT_P"] = "3"
 os.environ["SHIFT_SIM"] = "entropy"
 

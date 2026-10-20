@@ -1264,3 +1264,22 @@ library from its last query row and BY_LIB from its first; the MRRs agree to 0.0
 
 The spread is the coverage question an LB run would test. On the ship rule (+0.005 scaled)
 this is a probe, not a ship; the decision is made with the kernel in hand.
+
+**LB: v17 (SW 16) scored 0.264 against v15's 0.257, +0.007** (+0.006 to +0.008 after
+rounding). That is between the coverage-scaled +0.0035 and the plan's +0.011, and within the
+LB's ±0.003–0.005 of each. Back-solved with classes 1 and 2 at their predicted −0.0002, the
+real class 3 gain is +0.0098. That implies coverage 0.16 at the non-env answers' gain per
+covered answer (+0.060), or 0.24 at the covered split's (+0.0415); with ±0.004 of LB noise
+the ranges are 0.07–0.25 and 0.11–0.37. Both point estimates lean above HANDOFF's 0.12, which
+already called the true figure "probably somewhat higher", but one LB point does not settle
+coverage.
+
+It is the first LB step outside the noise since v12. v14 (+0.002) and v15 (+0.003) were
+inside it, and v13 (−0.007) and v16 (−0.014) won held-out and reversed. Those two changed
+every candidate's score; this term leaves the pool alone and moves only the molecules that
+have a real relative (LEARNING.md entry 3).
+
+The kernel ran 83.8 min on the placeholder, with the search at 1178 s (3.4x the Mac).
+Scoring took ~2.5 h against v15's ~70 min. That is unexplained: either the hidden test has
+more spectra, or the run was queued. Kaggle's file matches the local SW 16 file on 396 of
+400 lists (2 reorders, 1 top-1 change). x86-vs-ARM near-ties are suspected, not verified.

@@ -1,4 +1,4 @@
-# Handoff — CASMI 2026 (as of 2026-10-18)
+# Handoff — CASMI 2026 (as of 2026-10-20)
 
 Read RESULTS.md §11–30 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
@@ -6,19 +6,25 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 ## Where we stand
 
 - Competition: `enveda-CASMI26-molecule-id-mass-spectra`, MRR@25 on InChIKey14, closes 14 Dec 2026.
-- **Best LB 0.257 (v15)** = v14 + a 4-seed fingerprint ensemble (§29); **v14 0.254**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
+- **Best LB 0.264 (v17)** = v15 + mass-shifted analogs (`SHIFT_W=16 SHIFT_P=3 SHIFT_SIM=entropy`, §32, Raasta B
+  component 1): spectral relatives within ±200 Da re-rank the pool, no candidates added. Predicted +0.0035
+  (coverage-scaled) to +0.011 (plan formula), scored +0.007. **Select v17 for the final ranking, v15 second**
+  (v15 is the same pipeline without the channel). Learning log for Raasta B: `LEARNING.md`.
+- v15 0.257 = v14 + a 4-seed fingerprint ensemble (§29); **v14 0.254**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
   molecule (§14), fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**, §21–22)
   plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002;
   the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v16 (0.243)**, the failed PubChem
-  popularity pool (§31). `kernel/casmi_submit.py` and `kernel/kernel-metadata.json` are back at v15's config
-  (`PRIOR_W` 0.5, no `casmi26-pubchem-pop2`). v15 (0.257, best) is
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v17 (0.264)**. `kernel/casmi_submit.py`
+  is v15's config plus `SHIFT_W=16`; `kernel/kernel-metadata.json` is v15's. v17's code dataset version is v15's
+  `kernel/code/` with this tree's `fpsearch.py` and `shifted.py` on top (`data/jobs/kcode_build.sh`, which also proves
+  the folder reproduces the locally tested SW 16 file). v16 (0.243) was the failed PubChem popularity pool (§31).
+  v15 (0.257) is
   v14 plus a 4-seed ensemble (§29). `kernel/code/` (git-ignored) holds v15's files: the repo's code, `fpmodel.pt` =
   `data/fpmodel_rank.pt` (v12's model), `fpmodel_s{1,2,3}.pt` = `data/fpmodel_rank_s{1,2,3}.pt`, `coconut_meta.npz` =
   `data/coconut_meta/meta.npz`; `kernel/casmi_submit.py` sets the `PRIOR*` env and the comma-separated
   `fingerprint.MODEL`. v15 was expected to tie v14 (scaled eval +0.0005) and scored +0.003, inside the LB's noise:
-  the ensemble is not shown to be worth +0.003, only not to hurt. **Select v15 for the final ranking** (v14 second).
+  the ensemble is not shown to be worth +0.003, only not to hurt.
 - Ranking loss swept on the Mac (§24): at the shipped gamma 32 nothing beats tau 0.05 / lambda 1 / lr 1e-3 / 2 epochs,
   so v12 stays. Sharper tau wins only at gamma >= 64, which held-out over-rewards (§15–16). A tau 0.0125 fine-tune of
   `fpmodel.pt` (`data/fpmodel_rank_t0125.pt`) fails the gate against v12 on `splits.npz` at raw gamma.
@@ -41,8 +47,9 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v12 | fpmodel + in-pool ranking loss (§21–22), gamma 32, no gate | **0.252** |
 | v13 | tau 0.0125 ranking model, std-normalised fingerprint term, gamma 2.62 (§27) | 0.245 |
 | v14 | v12 + COCONUT synonym prior w 0.5, gate 0.8 (§28) | 0.254 |
-| v15 | v14 + 4-seed fingerprint ensemble (§29) | **0.257** |
+| v15 | v14 + 4-seed fingerprint ensemble (§29) | 0.257 |
 | v16 | v15 + PubChem 2+ synonym pool (16M), prior w 1 (§31) | 0.243 (pool expansion closed again) |
+| v17 | v15 + mass-shifted analogs, SW 16, entropy, p 3 (§32) | **0.264** |
 
 ## Read first: what looks like a fact but is not
 
@@ -113,7 +120,25 @@ mix (§7–8) is in those terms. Consequences:
   elasticity +0.50, ranking-quality elasticity −0.86 against pool size. Do not add candidates.
 - §17–23 numbers are at gamma 128, not the gamma they name (see "Where we stand"). §24 re-measures at gamma 32.
 
-## Next steps (picked 2026-10-18, after v15)
+## Next steps (Raasta B, picked 2026-10-20)
+
+Raasta B builds the public pipelines' missing components in our own code, for learning:
+`docs/superpowers/specs/2026-10-20-raasta-b-design.md`. Every experiment carries the user's numeric prediction in
+`LEARNING.md`, written before the data. LB probes are allowed with a prediction written first, and a probe enters final
+selection only if it beats its pre-registered threshold.
+
+1. **(Done, v17 0.264) Mass-shifted analogs**: plan `docs/superpowers/plans/2026-10-20-mass-shifted-analogs.md`,
+   §32, `LEARNING.md` entries 1–3. The LB back-solves class 3 coverage to ~0.16 (0.07–0.25 with noise) against the
+   0.12 rule below. That leans higher but does not overturn the rule.
+2. **Next: learned ranker with MetFrag-lite features** (spec component 2). Its features must come from a fingerprint
+   model that has not seen the ranker's training queries. A ranker re-scores every candidate, as v13's scoring did, so
+   read its held-out gain through both LB models.
+3. Gated PubChem channel (fixed slots, not merged into the pool), then our own timsTOF forward model (spec 3–4).
+
+Timing: v17's scoring run took ~2.5 h (v15 ~70 min), unexplained. Budget new kernel time on top of that, not on top of
+the 84 min commit run.
+
+## Next steps (picked 2026-10-18, after v15; superseded by Raasta B above)
 
 A change is worth an LB slot only if its coverage-scaled prediction is >= +0.005 (see "What the eval can and cannot
 tell you"). With class 3 coverage ~0.12, a class 3 ranking change needs **+0.057 covered quality** to get there, so
@@ -263,7 +288,10 @@ SPLITS=data/splits_big.npz FP_MODEL=data/fpmodel_big_<name>.pt FRACS=1 GAMMA=32 
   MIN_AVAIL_MB=2500 ../guard.sh python3 dilute.py            # add C2_BANNED=1 for the second run
 ```
 
-## Kaggle submit workflow (~66 min kernel + ~70 min scoring)
+## Kaggle submit workflow (~66 min kernel + ~70 min scoring at v15; v17: 84 min + ~2.5 h)
+
+Claude Code's auto mode refuses `kaggle datasets version`, `kaggle kernels push` and `kaggle competitions submit`
+as writes to a connected app; the user runs them with `!`. Status polls and `kaggle kernels output` are read-only.
 
 1. Copy `fpmodel.pt` (the new shipped model) and any changed `.py` to `kernel/code/`.
 2. `kaggle datasets version -p kernel/code -m "..." -q`, poll `kaggle datasets status jagjeetsingh23/casmi26-molecule-id-code`.
