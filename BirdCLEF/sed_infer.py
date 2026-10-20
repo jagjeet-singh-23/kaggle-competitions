@@ -38,6 +38,12 @@ class SEDOnnx:
         torch.set_num_threads(threads)
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = threads
+        # ORT's graph optimizations change the trained model's output by up to 0.08
+        # (onnxruntime 1.24.4). The graph itself is right: with them off it matches
+        # torch to 1e-6. HGNetV2's LearnableAffineBlock (x*scale + bias after ReLU)
+        # is the likely trigger; at initialisation scale=1, bias=0 hide it. Off costs
+        # ~11% speed.
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         self.sess = ort.InferenceSession(onnx_path, sess_options=opts,
                                          providers=["CPUExecutionProvider"])
         self.fe, self.batch, self.torch = LogMel().eval(), batch, torch
@@ -80,6 +86,23 @@ def selftest():
     assert got.shape == (32, 234), got.shape
     diff = np.abs(got - ref).max()
     assert diff < 1e-4, diff
+
+    # End to end: what training scored on the GPU for its held-out windows must be
+    # what this CPU path scores for the same cached windows.
+    ckpt_dir = os.path.dirname(os.environ.get("SED_CKPT", DEFAULT_CKPT))
+    if os.path.exists(f"{ckpt_dir}/val_pred.npy"):
+        import pandas as pd
+
+        from sed_train import labelled_folds
+
+        rows = np.where(labelled_folds(pd.read_csv(f"{cache}/labelled_meta.csv")) == 0)[0]
+        audio = np.load(f"{cache}/labelled_audio.npy", mmap_mode="r")
+        with tempfile.TemporaryDirectory() as d:
+            export_onnx(model, f"{d}/sed.onnx")
+            cpu = SEDOnnx(f"{d}/sed.onnx", threads=4).run(audio[rows].astype(np.float32) / 32767)
+        gpu_diff = np.abs(cpu - np.load(f"{ckpt_dir}/val_pred.npy")).max()
+        assert gpu_diff < 2e-3, gpu_diff
+        print(f"  training-time GPU predictions reproduced on CPU: max diff {gpu_diff:.1e}")
     print(f"sed_infer self-checks passed (max |onnx - torch| = {diff:.1e})")
 
 
