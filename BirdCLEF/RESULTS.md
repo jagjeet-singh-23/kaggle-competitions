@@ -912,9 +912,15 @@ teacher.py            kernel_perch as functions; Perch over unlabelled; B and Bf
 kernel_sed_train_b/   SED training kernel on B targets
 kernel_sed_train_bfull/  SED training on all 127,104 windows, audio decoded in the kernel
 kernel_blend/         Perch + SED kernel                 0.91148 / 0.91027 / 0.92159 private (no-go)
+track.py              every submission and SED training run -> MLflow (birdclef-lb, birdclef-sed-train)
+notebooks/experiments.ipynb  reads them back: LB table, training curves, data scale, blend weight
 ```
 
 Self-checks that need no competition data: `python3 rung1c.py --selftest`,
 `python3 smooth.py --selftest`, `python3 head.py --selftest`, `python3 sed_model.py --selftest`,
-`python3 sed_train.py --selftest`. `python3 teacher.py --selftest` needs the competition
-data and the Perch ONNX.
+`python3 sed_train.py --selftest`, `python3 track.py --selftest`. `python3 teacher.py --selftest`
+needs the competition data and the Perch ONNX.
+
+The experiment history lives in a local MLflow server (http://127.0.0.1:5050). After a new
+submission, add it to `SUBMISSIONS` in track.py and rerun
+`MLFLOW_TRACKING_URI=http://127.0.0.1:5050 python3 track.py`; it logs only what is missing.
