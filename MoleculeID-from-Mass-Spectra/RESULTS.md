@@ -1283,3 +1283,175 @@ The kernel ran 83.8 min on the placeholder, with the search at 1178 s (3.4x the 
 Scoring took ~2.5 h against v15's ~70 min. That is unexplained: either the hidden test has
 more spectra, or the run was queued. Kaggle's file matches the local SW 16 file on 396 of
 400 lists (2 reorders, 1 top-1 change). x86-vs-ARM near-ties are suspected, not verified.
+
+## 33. A learned ranker over v17's top 100, with MetFrag-lite: covered class 3 0.523 -> 0.688
+
+**Features** (`features.py`, 27 in 9 groups). For each query, v17's candidate list is scored
+as v17 scores it, and the top `N_RERANK = 100` rows are kept. Rank, gap and z versions of
+the cheap terms are taken over the whole list before the cut:
+
+| group | features |
+|---|---|
+| v17 | `v17` (v17's total), `v17_rank`, `v17_gap` |
+| spec | `spec`, `spec_gap`, `has_spec`, `prop` |
+| fp | `fp` (T(fp)), `fp_rank`, `fp_gap`, `fp_z` |
+| shift | `shift3`, `shift1`, `shift_tan`, `shift_top` |
+| prior | `prior`, `prior_rank` |
+| frag | `frag` (best spectrum), `frag_mean`, `frag_gap` |
+| formula | `formula` (§12's sub-formula check) |
+| mass | `ppm` |
+| pool | `log_pool`, `top_spec`, `n_spectra`, `in_pool`, `internal` |
+
+**MetFrag-lite** (`metfrag.py`). The fragments are every piece that one or two bond
+cleavages make. For each bond i, Tarjan's bridges on G − i with subtree mass sums give
+the exact two-cut set. A fragment ion is the fragment ± up to 2 H, carrying a proton or the
+adduct's own ion, matched within 0.01 Da. The score is the fraction of the spectrum's
+(sqrt-scaled) intensity at a fragment ion. Above 64 bonds only single cuts are made; this
+affects 0.6% of index and 8.8% of COCONUT structures. Speed is a median 0.33 ms per index
+structure and 0.49 ms per COCONUT one. The two-cut set agrees with brute force on 300 of
+300 structures.
+
+**Tables** (`ranker.py --table`). Built at v17's settings with `C2_BANNED=1` and
+`TRUE_ADDUCT=1`, SW 16, on the leak-free model of each split:
+
+| split | rows | model |
+|---|---|---|
+| `splits_bigord` | 144,838 | 2-seed |
+| `splits_big` | 123,976 | 4-seed |
+
+v17 recomputed from the tables matches §32's SW 16 row to 4 decimals on every class.
+
+**Ceiling** (the answer at rank 1 whenever it is in v17's top 100):
+
+| reading | ceiling |
+|---|---|
+| bigord non-env class 3 | 0.238 |
+| big covered class 3 | 0.930 |
+| bigord class 1 | 0.998 |
+
+**Ranker.** 5-fold out-of-fold scores, with folds on the structure key. Each row is weighted
+`MIX[class] / n_queries_with_answer[class]`. Three models:
+- **GBM:** prvsiyan's HistGBM (depth 6, 500 iterations, lr 0.03, min leaf 80, l2 1), with
+  early stopping off, 4 seeds.
+- **linear:** logistic, C 1.
+- **lambdarank:** LightGBM (500 trees, lr 0.03, 63 leaves, min child 80, λ 1). With no
+  bagging it is deterministic. Its 4-seed and 1-seed out-of-fold scores are identical (max
+  |diff| 0.0), so the seeds cost 4× and buy nothing.
+
+| | bigord non-env class 3 | big covered class 3 | bigord class 1 | big class 1 |
+|---|---|---|---|---|
+| v17 | 0.1507 | 0.5234 | 0.9232 | 0.9151 |
+| ceiling | 0.238 | 0.930 | 0.998 | |
+| linear, no frag/formula | 0.1622 | 0.6262 | 0.9040 | 0.9038 |
+| GBM, no frag/formula | 0.1632 | 0.6248 | 0.9218 | 0.9220 |
+| lambdarank, no frag/formula | 0.1662 | 0.6666 | 0.9283 | 0.9224 |
+| GBM, all features | 0.1676 | 0.6396 | 0.9212 | 0.9192 |
+| **lambdarank, all features** | **0.1775** | **0.6882** | **0.9366** | **0.9299** |
+
+Full lambdarank against v17, paired bootstrap 95% intervals:
+
+| reading | delta |
+|---|---|
+| non-env class 3 | +0.0268 [+0.014, +0.041] |
+| covered class 3 | +0.1649 [+0.148, +0.181] |
+| bigord class 1 | +0.0134 [−0.001, +0.028] |
+| big class 1 | +0.0148 [+0.000, +0.031] |
+
+Class 2 (`C2_BANNED`) goes 0.0348 → 0.0502 on bigord and 0.0382 → 0.0514 on big. Adding frag
+and formula to lambdarank is worth:
+
+| reading | delta |
+|---|---|
+| covered class 3 | +0.0217 [+0.011, +0.031] |
+| non-env class 3 | +0.0113 [+0.003, +0.021] |
+| bigord class 1 | +0.0084 [+0.001, +0.016] |
+
+For GBM the same addition is worth +0.0148 on covered class 3 and +0.0044 on non-env class
+3 (interval crosses 0). GBM's class 1 stays at v17 level, and on bigord its strong library
+matches fall (`top_spec ≥ 0.8`: 0.9235 → 0.9197).
+
+**Within-query AUC** of one feature: the answer against the query's other candidates, ties
+counted half. Where lower is better (ranks, `ppm`) the value is below 0.5.
+
+| feature | big covered c3 | bigord non-env c3 | big c1 | bigord c1 |
+|---|---|---|---|---|
+| v17 | 0.900 | 0.906 | 0.993 | 0.995 |
+| shift1 | 0.863 | 0.894 | 0.987 | 0.988 |
+| fp | 0.861 | 0.858 | 0.986 | 0.989 |
+| frag_mean | 0.780 | 0.845 | 0.959 | 0.959 |
+| frag | 0.777 | 0.829 | 0.955 | 0.956 |
+| prior | 0.758 | 0.789 | 0.444 | 0.445 |
+| prop | 0.708 | 0.642 | 0.973 | 0.977 |
+| formula | 0.542 | 0.540 | 0.590 | 0.597 |
+| spec | 0.346 | 0.331 | 0.977 | 0.980 |
+
+On class 3, `spec` reads 0.346. A candidate with a library match is usually not the class 3
+answer, whose spectra are not in the library.
+
+The isomer test is in the notebook. 849 covered answers have an exact isomer (same
+molecular formula) among their candidates, 35,726 isomers in all. Against those isomers
+alone:
+- `formula`: 0.500, by construction;
+- `frag`: 0.734 (`frag_mean` 0.745);
+- `fp`: 0.800, `prior` 0.747, `v17` 0.850.
+
+The fragmenter separates isomers almost as well as it separates all candidates (0.777).
+§12's formula check could not, and here reads 0.542, not §12's 0.6.
+
+**Group ablation**, lambdarank on all features with one group dropped. These are 1-seed
+runs, which are the same as 4 seeds. Each delta is against the full model, with a paired
+bootstrap 95% interval:
+
+| dropped | big covered c3 | bigord non-env c3 | big c1 | bigord c1 |
+|---|---|---|---|---|
+| (none) | 0.6882 | 0.1775 | 0.9299 | 0.9366 |
+| frag | **−0.0206** [−0.031, −0.010] | **−0.0076** [−0.016, −0.001] | −0.0048 | −0.0059 |
+| prior | −0.0143 [−0.026, −0.004] | −0.0016 | −0.0020 | −0.0030 |
+| shift | −0.0119 [−0.021, −0.002] | −0.0025 | −0.0053 | −0.0112 [−0.020, −0.002] |
+| v17 | −0.0091 [−0.018, −0.000] | −0.0047 | +0.0008 | −0.0007 |
+| pool | −0.0086 [−0.015, −0.003] | −0.0040 [−0.009, −0.000] | −0.0028 | −0.0040 |
+| fp | −0.0057 | −0.0041 | **−0.0267** [−0.043, −0.011] | **−0.0272** [−0.043, −0.012] |
+| mass | −0.0003 | −0.0034 | +0.0005 | −0.0026 |
+| spec | −0.0006 | +0.0015 | −0.0016 | −0.0024 |
+| formula | −0.0003 | +0.0000 | +0.0030 [+0.000, +0.007] | +0.0003 |
+
+Dropping one group measures what no other group carries, not what the ranker leans on.
+- `fp` has the highest single AUC on class 3, yet dropping it costs only −0.006 there,
+  because v17's total and the shift terms carry it too. On class 1, dropping it costs
+  −0.027.
+- `frag` is in no other feature, and dropping it costs the most on both class 3 readings.
+  Only `frag` and `pool` have intervals that exclude zero on both.
+- `formula` adds nothing once `frag` is there.
+
+**Where the gain comes from** (`data/jobs/exp3_read.py`, full lambdarank against v17):
+
+| | up | down | to rank 1 | lost rank 1 | into top 25 | out of top 25 |
+|---|---|---|---|---|---|---|
+| big covered class 3 (1000) | 423 | 62 | 244 | 17 | 22 | 6 |
+| bigord non-env class 3 (302) | 24 | 4 | 10 | 0 | 4 | 1 |
+
+By the answer's COCONUT synonyms:
+
+| | 0–1 | 2–4 | 5–19 | 20+ |
+|---|---|---|---|---|
+| big covered (all features) | 0.420 → 0.545 (n 246) | 0.483 → 0.581 (168) | 0.507 → 0.722 (314) | 0.660 → 0.845 (272) |
+| big covered (no frag/formula) | 0.420 → 0.513 | 0.483 → 0.554 | 0.507 → 0.702 | 0.660 → 0.834 |
+| bigord non-env (all features) | 0.038 → 0.045 (244) | 0.444 → 0.490 (15) | 0.488 → 0.634 (20) | 0.857 → 0.978 (23) |
+
+frag's gain is largest on the least documented answers: +0.032 at 0–1 synonyms against
++0.011 at 20+. It is a signal that does not depend on popularity. Class 1 rises on both
+strong (`top_spec ≥ 0.8`: bigord 0.9235 → 0.9442) and weaker matches (0.9229 → 0.9296).
+
+**LB prediction** (full lambdarank against v17; class 1 and class 2 terms from bigord,
++0.0038):
+
+| model | prediction |
+|---|---|
+| plan formula: 0.140 × 0.0134 + 0.126 × 0.0154 + 0.735 × 0.0268 | **+0.023** |
+| coverage-scaled, 0.735 × 0.12 × 0.1649 + 0.0038 | **+0.018** |
+| at coverage 0.16 (§32's back-solve) | +0.023 |
+| pessimistic: hidden covered answers like the 0–1 stratum (+0.125) | +0.015 |
+
+All four clear the +0.005 ship rule. The risk is v13's: this ranker re-scores every
+candidate, and v13 won held-out and fell on the LB. The ship decision is made in Task 7 with
+the kernel in hand.
