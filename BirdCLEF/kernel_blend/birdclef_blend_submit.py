@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 
 MODE = "blend"
-W_SED = 0.5
-SED_ONNX = "sed_fold0_B.onnx"    # pilot A: sed_fold0.onnx
+W_SED = 0.5                          # full B at 0.25 (v8): 0.92523 private, still below Perch
+SED_ONNX = "sed_fold0_Bfull.onnx"    # pilot A: sed_fold0.onnx, pilot B: sed_fold0_B.onnx
 
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)
