@@ -78,16 +78,65 @@ def _mono(path, frames=-1):
     return y if y.ndim == 1 else y.mean(axis=1)
 
 
-def _windows(path, meta, sub):
-    """Write one int16 row per (filename, start_s) of meta, in meta's row order."""
+def _decode(job):
+    """One file's windows, written into its own rows of the shared .npy."""
     from perch import to_windows
 
-    mm = np.lib.format.open_memmap(path, mode="w+", dtype=np.int16, shape=(len(meta), WIN_SAMPLES))
-    for n, (fn, g) in enumerate(meta.groupby("filename", sort=False)):
-        mm[g.index.to_numpy()] = to_int16(to_windows(_mono(f"{DATA}/{sub}/{fn}"), g.start_s.tolist()))
-        if n % 1000 == 0:
-            print(f"  {path.rsplit('/', 1)[1]}: {n:,} files", flush=True)
+    path, rows, audio, starts = job
+    mm = np.load(path, mmap_mode="r+")
+    mm[rows] = to_int16(to_windows(_mono(audio), starts))
     mm.flush()
+    return len(rows)
+
+
+def windows(path, meta, audio_dir, workers=1):
+    """Write one int16 row per (filename, start_s) of meta, in meta's row order. Each
+    file is decoded by exactly one worker, which writes only its own rows."""
+    assert (meta.index == np.arange(len(meta))).all(), "meta needs a 0..n-1 index"
+    np.lib.format.open_memmap(path, mode="w+", dtype=np.int16, shape=(len(meta), WIN_SAMPLES)).flush()
+    jobs = [(path, g.index.to_numpy(), f"{audio_dir}/{fn}", g.start_s.tolist())
+            for fn, g in meta.groupby("filename", sort=False)]
+    if workers > 1:
+        from multiprocessing import Pool
+
+        with Pool(workers) as pool:
+            done = pool.imap_unordered(_decode, jobs, chunksize=8)
+            for n, _ in enumerate(done):
+                if n % 1000 == 0:
+                    print(f"  {path.rsplit('/', 1)[1]}: {n:,}/{len(jobs):,} files", flush=True)
+    else:
+        for n, job in enumerate(jobs):
+            _decode(job)
+            if n % 1000 == 0:
+                print(f"  {path.rsplit('/', 1)[1]}: {n:,}/{len(jobs):,} files", flush=True)
+    assert np.load(path, mmap_mode="r").shape == (len(meta), WIN_SAMPLES)
+
+
+def _windows(path, meta, sub):
+    windows(path, meta, f"{DATA}/{sub}")
+
+
+STAGED = ("focal_audio.npy", "focal_index.csv", "focal_targets.npy",
+          "labelled_audio.npy", "labelled_meta.csv", "labelled_targets.npy")
+
+
+def stage_full(out, meta, audio_dir, cache_dir, targets_path, workers, need=None):
+    """Full-scale B's training cache in out: every unlabelled window decoded here, with
+    the pilot cache's focal and labelled files and the Bfull targets linked beside it.
+    Refuses before decoding anything if out's disk cannot hold the windows."""
+    import shutil
+    import time
+
+    need = int(1.05 * len(meta) * WIN_SAMPLES * 2) if need is None else need
+    free = shutil.disk_usage(out).free
+    if free < need:
+        raise RuntimeError(f"{out}: {free / 1e9:.1f} GB free, {need / 1e9:.1f} GB needed")
+    t0 = time.time()
+    windows(f"{out}/pseudo_audio.npy", meta, audio_dir, workers)
+    for name in STAGED:
+        os.symlink(f"{cache_dir}/{name}", f"{out}/{name}")
+    os.symlink(targets_path, f"{out}/pseudo_targets_Bfull.npy")
+    return {"rows": len(meta), "sec": time.time() - t0, "free_gb": free / 1e9}
 
 
 def main():
@@ -174,6 +223,33 @@ def selftest():
     f = focal_items(tr, classes, per_class=30, seed=0)
     assert f.groupby("label_idx").size().max() <= 30
     assert f.equals(focal_items(tr, classes, per_class=30, seed=0))
+
+    # Full-scale B decodes its windows inside the training kernel; they must be the
+    # pilot cache's bytes, whatever the number of workers.
+    import tempfile
+
+    meta = pd.read_csv(f"{OUT}/pseudo_meta.csv")
+    three = meta[meta.filename.isin(meta.filename.unique()[:3])]
+    pilot = np.load(f"{OUT}/pseudo_audio.npy", mmap_mode="r")
+    with tempfile.TemporaryDirectory() as d:
+        windows(f"{d}/w.npy", three.reset_index(drop=True), f"{DATA}/train_soundscapes", workers=2)
+        assert np.array_equal(np.load(f"{d}/w.npy"), pilot[three.index.to_numpy()])
+
+        tp = f"{d}/t.npy"
+        np.save(tp, np.zeros((len(three), 234), np.float16))
+        os.makedirs(f"{d}/s")
+        try:
+            stage_full(f"{d}/s", three.reset_index(drop=True), f"{DATA}/train_soundscapes", OUT, tp, 2,
+                       need=10**18)
+            raise AssertionError("stage_full must refuse when disk is short")
+        except RuntimeError as e:
+            assert "free" in str(e)
+        info = stage_full(f"{d}/s", three.reset_index(drop=True), f"{DATA}/train_soundscapes", OUT, tp, 2)
+        assert info["rows"] == len(three)
+        assert sorted(os.listdir(f"{d}/s")) == sorted(
+            ["pseudo_audio.npy", "pseudo_targets_Bfull.npy", "focal_audio.npy", "focal_index.csv",
+             "focal_targets.npy", "labelled_audio.npy", "labelled_meta.csv", "labelled_targets.npy"])
+        assert np.array_equal(np.load(f"{d}/s/pseudo_audio.npy"), pilot[three.index.to_numpy()])
     print("sed_cache self-checks passed")
 
 
