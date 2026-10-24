@@ -787,7 +787,104 @@ cost minutes, not hours.
 Datasets: `birdclef-sed-targets` (13:18 UTC) and a `birdclef-sed-models` version
 holding both ONNX files (13:54 UTC), on 2026-10-20.
 
-## 17. Files
+## 17. Full-scale B: does data scale make the SED pay?
+
+Section 16 left data scale as the next suspect. Full-scale B keeps Phase B as it
+was: the Perch kernel as teacher through quantile mapping, fold 0, the seed, the
+recipe and W_SED. It changes one thing, the pseudo-labelled windows, from 12,000 to
+all 127,104. The rule was set before the run: go if SED alone reached 0.90 private
+and the blend 0.9318 (Perch + 0.005), stop if neither did, and a mixed result was
+the user's call.
+
+| submission | public | private |
+|---|---|---|
+| Perch kernel (section 14) | 0.92423 | **0.92681** |
+| SED alone, pilot A (12k windows, public teacher) | 0.87753 | 0.86072 |
+| SED alone, pilot B (12k windows, Perch teacher) | 0.85621 | 0.87352 |
+| SED alone, full B (127k windows, Perch teacher) | 0.90812 | 0.90459 |
+| blend w=0.5, pilot A | 0.91718 | 0.91148 |
+| blend w=0.5, pilot B | 0.89834 | 0.91027 |
+| blend w=0.5, full B | 0.92071 | 0.92159 |
+| blend w=0.25, full B (probe) | 0.92442 | 0.92523 |
+
+**Stop. BirdCLEF closes at 0.92681.**
+- **Data scale is real.** Full B minus pilot B is +0.0311 private and +0.0519
+  public for SED alone, and +0.0113 / +0.0224 for the blend. Both are far outside
+  LB noise (±0.003–0.005). SED's public-to-private drop shrank from 0.017 (pilot A)
+  to 0.0035.
+- **The result was mixed.** SED alone cleared 0.90, and the blend missed 0.9318 by
+  0.010.
+- **The probe did not rescue the blend.** For the mixed case the user chose one
+  learning probe: the same model at w=0.25. The prediction, written before the
+  push, was 0.926–0.930. It scored 0.92523, below the prediction and 0.0016 below
+  Perch alone on private. On public it was +0.0002, which is noise. The weight was
+  chosen against the private LB after the close, so this is a learning result, not
+  a validated one.
+- **Private falls monotonically with the SED's weight:** 0.92681 at w=0, 0.92523 at
+  0.25, 0.92159 at 0.5, 0.90459 at 1. A rank blend gets nothing from one 0.905 SED
+  fold that Perch does not already have.
+
+Closing the gap needs an SED that is strong on its own. DS@GT's single HGNetV2-B0
+scored 0.917, and 13th place's CNN on a strong teacher 0.934. That means more folds,
+more epochs or a better recipe, each a multi-day GPU budget, for a competition that
+no longer ranks.
+
+**Training.**
+
+| | pilot B | full B |
+|---|---|---|
+| pseudo windows | 12,000 | 127,104 |
+| train rows (pseudo + 5,313 focal + 535 labelled) | 17,848 | 132,952 |
+| steps per epoch | 278 | 2,077 |
+| pseudo audio | uploaded cache (section 16) | decoded in the kernel: 6.3 min, 337 windows/s, 4 CPUs |
+| epoch 0, then per epoch | 262 s, then ~74 s | 696 s, then ~577 s |
+| loader wait, epochs 1+ | 0.2–1.2% | 6.1–10.4% |
+| GPU time, T4 | ~28 min | ~195 min |
+| fold-0 val AUC, last (peak) | 0.9729 (0.9732) | 0.9817 (0.9884, epoch 5) |
+
+The 127,104 windows are 40.7 GB as int16, too big to upload. `sed_cache.stage_full`
+decodes them from `train_soundscapes` onto the kernel's scratch disk, which had
+1,126 GB free. It checks for 42.7 GB before it starts. Validation AUC is still
+inflated, because every teacher saw fold 0's labels. It orders the three runs as
+SED-alone private does (A < B < full B), but not as public does.
+
+**The two teachers still disagree at full scale.** Per-class Spearman(A, B) over all
+127,104 windows is 0.150 / 0.255 / 0.388 (q25 / median / q75). By route the median
+is 0.391 for head classes, 0.201 for zero-shot classes and 0.536 for the two
+cold-start classes. This matches the 12,000-window numbers. Quantile mapping keeps
+each class's count above 0.5, but B concentrates those positives into fewer windows:
+
+| classes > 0.5 in a window | 0 | 1 | 2 | 3+ |
+|---|---|---|---|---|
+| A (public teacher) | 16.7% | 21.2% | 20.7% | 41.5% |
+| B (Perch teacher) | 17.4% | 19.0% | 19.6% | 44.0% |
+
+**Other details.**
+- scipy 1.18's `rankdata` keeps float16, so ranks overflow past 65,504 rows, and
+  Spearman came out NaN on every class at 127,104. `teacher.class_spearman` casts to
+  float64 first. At 12,000 rows the error is ~2.5e-6, so section 16's numbers stand.
+- The decode pool needs the launcher under `if __name__ == "__main__"`. macOS
+  spawns the workers and re-imports the launcher, and the first local test hung.
+- Blend kernel v5 ended in ERROR with an empty log. It had been pushed a minute
+  after the models dataset version was created. v6, the same code, ran.
+- `sed_fold0_Bfull.onnx` is 12 KB larger than the Oct-20 exports (local torch). It
+  reproduces the training-time GPU predictions on CPU to 7.7e-7, and SED inference
+  on Kaggle runs at 46–48 ms per window, as in section 16.
+
+| kernel | version | role |
+|---|---|---|
+| `birdclef26-sed-train-bfull` | v1 | training on all 127,104 windows |
+| `birdclef26-perch-sed-blend` | v5 | ERROR before the script ran (empty log) |
+| `birdclef26-perch-sed-blend` | v6 | full B blend w=0.5, submission 57592821 |
+| `birdclef26-perch-sed-blend` | v7 | full B SED alone, submission 57592972 |
+| `birdclef26-perch-sed-blend` | v8 | full B blend w=0.25 probe, submission 57594049 |
+
+Datasets, all on 2026-10-24:
+- `birdclef-sed-targets`: B, Bfull and `full_meta.csv`
+- `birdclef-kernel-code`: adds `sed_cache.py`
+- `birdclef-sed-models`: all three ONNX files
+
+## 18. Files
 
 ```
 birdnet.py            BirdNET V2.4 wrapper; logits + penultimate embedding
@@ -807,13 +904,14 @@ mixup.py, mixeval.py  focal calls mixed into soundscapes (negative)
 kernel/               BirdNET kernel, v1-v4              0.87008 private
 kernel_perch/         Perch kernel                       0.92681 private
 sed_model.py          log-mel front-end + HGNetV2-B0 SED head, ONNX export
-sed_cache.py          int16 pilot cache: pseudo, labelled, focal windows
+sed_cache.py          int16 window cache: pilot cache; full B decoded in-kernel (stage_full)
 sed_train.py          one SED fold on Kaggle GPU
 sed_infer.py          SED on CPU via ONNX Runtime; rank blend
 kernel_sed_train/     SED training kernel
-teacher.py            kernel_perch as functions; Perch over unlabelled; B targets
+teacher.py            kernel_perch as functions; Perch over unlabelled; B and Bfull targets
 kernel_sed_train_b/   SED training kernel on B targets
-kernel_blend/         Perch + SED kernel                 0.91148 / 0.91027 private (no-go)
+kernel_sed_train_bfull/  SED training on all 127,104 windows, audio decoded in the kernel
+kernel_blend/         Perch + SED kernel                 0.91148 / 0.91027 / 0.92159 private (no-go)
 ```
 
 Self-checks that need no competition data: `python3 rung1c.py --selftest`,

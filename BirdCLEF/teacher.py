@@ -209,16 +209,26 @@ def check_b(scores, A, B):
             f"class {j}: the column sum moved"
 
 
-def targets():
-    """pseudo_targets_B.npy for the pilot windows, in pseudo_meta.csv order."""
+def full_meta(stems, starts):
+    """row_id / filename / start_s for teacher rows, in the order given."""
+    import pandas as pd
+
+    from perch import WIN
+
+    stems, starts = np.asarray(stems), np.asarray(starts)
+    return pd.DataFrame({"row_id": np.char.add(np.char.add(stems, "_"), (starts + WIN).astype(str)),
+                         "filename": np.char.add(stems, ".ogg"), "start_s": starts})
+
+
+def scores():
+    """The Perch kernel's smoothed scores for every unlabelled window, in shard order
+    (files sorted, starts ascending): (state, P [127104, 234], stems, starts)."""
     import glob
 
     import pandas as pd
-    from scipy.stats import spearmanr
 
-    from perch import Perch, WIN, species_map
+    from perch import Perch, species_map
 
-    cache = os.environ.get("SED_CACHE", "/Volumes/Extreme SSD/kaggle/BirdCLEF/jobs/sed-cache")
     tax = pd.read_csv(f"{DATA}/taxonomy.csv", dtype={"primary_label": str})
     classes = tax.primary_label.tolist()
     idx = species_map(tax)
@@ -242,9 +252,56 @@ def targets():
     stems = np.char.replace(np.concatenate(names), ".ogg", "")
     starts = np.concatenate(starts)
     P = smooth(combine(state, Lk, H, C), stems, starts)
-    rid = pd.Index(np.char.add(np.char.add(stems, "_"), (starts + WIN).astype(str)))
-    assert rid.is_unique and len(rid) == 127_104, len(rid)
-    print(f"teacher scored {len(rid):,} windows", flush=True)
+    assert len(P) == 127_104, len(P)
+    print(f"teacher scored {len(P):,} windows", flush=True)
+    return state, P, stems, starts
+
+
+def class_spearman(A, B):
+    """Spearman(A, B) per column, NaN where A is constant. In float64: scipy ranks a
+    float16 input in float16, which overflows past 65,504 rows."""
+    from scipy.stats import spearmanr
+
+    A, B = A.astype(np.float64), B.astype(np.float64)
+    return np.array([spearmanr(A[:, j], B[:, j]).statistic if A[:, j].std() > 0 else np.nan
+                     for j in range(A.shape[1])])
+
+
+def diagnose(A, B, state, classes, tax):
+    """How differently the two teachers order the same windows, by Perch route, and
+    how many classes each puts above 0.5 per window."""
+    route = np.array(["head" if j in state["models"] else "zero-shot" if state["hit"][j]
+                      else "cold-start" for j in range(len(classes))])
+    rho = class_spearman(A, B)
+    q = np.nanpercentile(rho, [25, 50, 75])
+    print(f"Spearman(A, B) per class over {len(B):,} windows: "
+          f"q25 {q[0]:.3f}  median {q[1]:.3f}  q75 {q[2]:.3f}")
+    for r in ("head", "zero-shot", "cold-start"):
+        m = route == r
+        print(f"  {r:<10} {m.sum():3d} classes, median {np.nanmedian(rho[m]):.3f}")
+    print("10 lowest:")
+    for j in np.argsort(np.nan_to_num(rho, nan=9))[:10]:
+        print(f"  {classes[j]:<10} {tax.class_name[j]:<9} {route[j]:<10} rho {rho[j]:.3f}  "
+              f"A>0.5 on {(A[:, j] > 0.5).sum()} windows")
+    # The mean count is the same for A and B by construction (per-class marginals are
+    # shared); how the positives spread over windows is not.
+    for name, T in (("A", A), ("B", B)):
+        k = (T > 0.5).sum(1)
+        share = [(k == 0).mean(), (k == 1).mean(), (k == 2).mean(), (k >= 3).mean()]
+        print(f"classes > 0.5 per window, {name}: mean {k.mean():.2f}  "
+              f"0/1/2/3+: {' / '.join(f'{s:.1%}' for s in share)}")
+
+
+def targets():
+    """pseudo_targets_B.npy for the pilot windows, in pseudo_meta.csv order."""
+    import pandas as pd
+
+    cache = os.environ.get("SED_CACHE", "/Volumes/Extreme SSD/kaggle/BirdCLEF/jobs/sed-cache")
+    tax = pd.read_csv(f"{DATA}/taxonomy.csv", dtype={"primary_label": str})
+    classes = tax.primary_label.tolist()
+    state, P, stems, starts = scores()
+    rid = pd.Index(full_meta(stems, starts).row_id)
+    assert rid.is_unique, "duplicate teacher rows"
 
     meta = pd.read_csv(f"{cache}/pseudo_meta.csv")
     pos = rid.get_indexer(meta.row_id)
@@ -258,22 +315,36 @@ def targets():
     check_b(P[pos], A, B)
     np.save(f"{cache}/pseudo_targets_B.npy", B)
     print(f"wrote {cache}/pseudo_targets_B.npy {B.shape}", flush=True)
+    diagnose(A, B, state, classes, tax)
 
-    # Diagnosis: how differently the two teachers order the same windows, by route.
-    route = np.array(["head" if j in state["models"] else "zero-shot" if state["hit"][j]
-                      else "cold-start" for j in range(len(classes))])
-    rho = np.array([spearmanr(A[:, j], B[:, j]).statistic if A[:, j].std() > 0 else np.nan
-                    for j in range(len(classes))])
-    q = np.nanpercentile(rho, [25, 50, 75])
-    print(f"Spearman(A, B) per class over {len(B):,} windows: "
-          f"q25 {q[0]:.3f}  median {q[1]:.3f}  q75 {q[2]:.3f}")
-    for r in ("head", "zero-shot", "cold-start"):
-        m = route == r
-        print(f"  {r:<10} {m.sum():3d} classes, median {np.nanmedian(rho[m]):.3f}")
-    print("10 lowest:")
-    for j in np.argsort(np.nan_to_num(rho, nan=9))[:10]:
-        print(f"  {classes[j]:<10} {tax.class_name[j]:<9} {route[j]:<10} rho {rho[j]:.3f}  "
-              f"A>0.5 on {(A[:, j] > 0.5).sum()} windows")
+
+def targets_full():
+    """pseudo_targets_Bfull.npy + full_meta.csv: every unlabelled window, in shard order,
+    the same quantile mapping as Phase B onto the public teacher's values."""
+    import pandas as pd
+
+    from sed_cache import PSEUDO_CSV, targets_for
+
+    out = os.environ.get("TARGETS_OUT", "/Volumes/Extreme SSD/kaggle/BirdCLEF/jobs/sed-targets")
+    tax = pd.read_csv(f"{DATA}/taxonomy.csv", dtype={"primary_label": str})
+    classes = tax.primary_label.tolist()
+    state, P, stems, starts = scores()
+    meta = full_meta(stems, starts)
+    assert meta.row_id.is_unique, "duplicate teacher rows"
+    A = targets_for(PSEUDO_CSV, meta.row_id.tolist(), classes)
+    rows = (0, len(meta) // 2, len(meta) - 1)                # the A lookup, checked another way
+    want = set(meta.row_id.iloc[list(rows)])
+    raw = pd.concat(c[c.row_id.isin(want)] for c in
+                    pd.read_csv(PSEUDO_CSV, usecols=["row_id"] + classes, chunksize=20_000))
+    for i in rows:
+        got = raw.loc[raw.row_id == meta.row_id.iloc[i], classes].to_numpy(np.float16)
+        assert got.shape == (1, len(classes)) and (got[0] == A[i]).all(), meta.row_id.iloc[i]
+    B = targets_b(P, A)
+    check_b(P, A, B)
+    meta.to_csv(f"{out}/full_meta.csv", index=False)
+    np.save(f"{out}/pseudo_targets_Bfull.npy", B)
+    print(f"wrote {out}/full_meta.csv, {out}/pseudo_targets_Bfull.npy {B.shape}", flush=True)
+    diagnose(A, B, state, classes, tax)
 
 
 def _fidelity(files):
@@ -368,6 +439,20 @@ def selftest():
             continue
         raise AssertionError("check_b accepted a B that is not A's values in the scores' order")
 
+    m = full_meta(np.array(["BC_x", "BC_x", "BC_y"]), np.array([0, 5, 0]))
+    assert m.row_id.tolist() == ["BC_x_5", "BC_x_10", "BC_y_5"]
+    assert m.filename.tolist() == ["BC_x.ogg", "BC_x.ogg", "BC_y.ogg"]
+    assert m.start_s.tolist() == [0, 5, 0]
+
+    # scipy >= 1.15 ranks float16 in float16: past 65,504 rows the ranks overflow.
+    from scipy.stats import spearmanr
+
+    A16 = rng.random((70_000, 2)).astype(np.float16)
+    B16 = (A16 + rng.random((70_000, 2)) * 0.5).astype(np.float16)
+    want = [spearmanr(A16[:, j].astype(np.float64), B16[:, j].astype(np.float64)).statistic
+            for j in range(2)]
+    assert np.allclose(class_spearman(A16, B16), want), class_spearman(A16, B16)
+
     diff = _fidelity(files[:20])
     assert diff < 1e-6, diff
     print(f"teacher self-checks passed (teacher vs kernel_perch on 20 files: max diff {diff:.1e})")
@@ -378,5 +463,7 @@ if __name__ == "__main__":
         selftest()
     elif "--embed" in sys.argv:
         embed()
+    elif "--targets-full" in sys.argv:
+        targets_full()
     elif "--targets" in sys.argv:
         targets()
