@@ -48,6 +48,12 @@ FP_NORM = os.environ.get("FP_NORM", "")
 SHIFT_W = float(os.environ.get("SHIFT_W", 0.0))
 SHIFT_P = float(os.environ.get("SHIFT_P", 3.0))
 SHIFT_SIM = os.environ.get("SHIFT_SIM", "entropy")
+# RANKER re-orders each molecule's top features.N_RERANK candidates by a learned ranker
+# (ranker.py --fit, RESULTS.md section 33) instead of v17's total: the path of an exported
+# model, "" leaves v17's order. RANK_BY="v17" is the test mode: the same feature rows,
+# ordered by their v17 column, which must reproduce the v17 file byte for byte.
+RANKER = os.environ.get("RANKER", "")
+RANK_BY = os.environ.get("RANK_BY", "")
 
 
 def normalise(t, how=FP_NORM):
@@ -203,6 +209,23 @@ def main():
         assert best[2][2] == 0, f"class 3 leaked: {best[2][2]:.4f}"
 
 
+def _learned_setup(gamma):
+    """The ranker's tables were built at v17's settings (features.V17, dilute's entropy
+    shift similarity, the COCONUT synonym prior), so its features mean what they meant
+    in training only there. Returns the loaded Ranker, or None for RANK_BY=v17."""
+    import features
+    from ranker import Ranker
+    c = features.V17
+    got = (gamma, BETA, SHIFT_W, SHIFT_P, SHIFT_SIM, FP_NORM, prior.PRIOR, prior.W, prior.GATE)
+    want = (c["gamma"], c["beta"], c["sw"], c["p"], "entropy", "", "syn", c["prior_w"], c["prior_gate"])
+    assert got == want, f"the ranker needs v17's settings {want}, got {got}"
+    assert RANK_BY in ("", "v17"), f"RANK_BY={RANK_BY!r}"
+    if not RANKER:
+        return None
+    assert os.path.exists(RANKER), f"RANKER={RANKER} does not exist"
+    return Ranker.load(RANKER)
+
+
 def submit(path=None, gamma=GAMMA):
     """Write submission.csv using search + analog + the predicted fingerprint.
 
@@ -218,10 +241,19 @@ def submit(path=None, gamma=GAMMA):
         gamma       16      32      64     128     256
         COCONUT   .1801   .1898   .1893   .1890   .1834
         + ChEMBL  .1791   .1895   .1878   .1868   .1786
+
+    With RANKER or RANK_BY set, each molecule's candidates come from
+    features.molecule_rows instead, the code the ranker's tables were built with, and
+    are ordered after the loop by one Ranker.score call over every molecule's rows.
     """
     import pandas as pd
     from metric import validate
 
+    learned = bool(RANKER or RANK_BY)
+    if learned:
+        import features
+        ranked = _learned_setup(gamma)
+        held, feat_s = [], 0.0
     path = path or f"{DIR}/submission.csv"
     te = pd.read_parquet(f"{DATA}/test.parquet")
     ix = library.load()
@@ -244,6 +276,21 @@ def submit(path=None, gamma=GAMMA):
         i = known[0] if known else 0
         pm = float(spectra[i][2])
         add = [g.adduct.iloc[i]] if known else ["[M+H]+"]
+        if learned:
+            pool = an.pool(pm, add)
+            fpq = query_fp(model, spectra) if len(pool) else None
+            analogs = []
+            if len(pool):
+                t0 = time.time()
+                shift, positive = ADDUCTS[add[0]]
+                analogs = si.search(spectra, pm - shift, positive, kind=SHIFT_SIM)
+                shift_s += time.time() - t0
+            t0 = time.time()
+            _, smi, X = features.molecule_rows(an, bits, spec, smiles, pm, add, fpq, spectra,
+                                               analogs, prior_of)
+            feat_s += time.time() - t0
+            held.append((mid, smi, X))
+            continue
         total, sm = dict(spec), dict(smiles)
         for k, v in an.propagate(spec, pm, add).items():
             total[k] = total.get(k, 0.0) + BETA * v
@@ -277,6 +324,20 @@ def submit(path=None, gamma=GAMMA):
         top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
         cands = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q] for q, _ in top]
         rows.append((mid, ";".join(cands[:TOP_K] or ["C"])))
+    if learned:
+        t0 = time.time()
+        X = np.concatenate([x for _, _, x in held] or [np.zeros((0, len(features.FEATURES)), np.float32)])
+        s = ranked.score(X) if ranked is not None else X[:, features.FEATURES.index("v17")]
+        changed, at = 0, 0
+        for mid, smi, x in held:
+            o = np.argsort(-s[at:at + len(x)], kind="stable")[:TOP_K]
+            at += len(x)
+            cands = [smi[j] for j in o]
+            changed += cands != smi[:TOP_K]
+            rows.append((mid, ";".join(cands or ["C"])))
+        print(f"learned order ({RANKER or 'RANK_BY=' + RANK_BY}): features {feat_s:.0f} s, "
+              f"scoring {time.time() - t0:.1f} s over {len(X):,} rows; "
+              f"{changed} of {len(held)} lists differ from v17's order")
     sub = pd.DataFrame(rows, columns=["molecule_id", "smiles"])
     validate(sub)
     sub.to_csv(path, index=False)

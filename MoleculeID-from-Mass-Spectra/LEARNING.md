@@ -372,3 +372,38 @@ Faisla Task 7 me kernel ke saath hoga.
 check se nahi. Doosri seekh ye hai ki "ranker kis pe tika hai" ka jawab ablation se nahi milta. Ablation batata hai ki
 kya irreplaceable hai, aur jo signal `v17` ke total me pehle se ghula hai (fp, prior), uska nuksaan wahan nahi
 dikhta.
+
+## 6. Kya seekhe hue ranker ka gain LB tak pahunchega? (2026-10-24)
+
+**Sawaal.** v18 = v17 + lambdarank ranker (`ranker_v1.npz`: saare 27 features, MetFrag-lite ke saath, 500 trees,
+numpy me export) jo har molecule ke v17 wale top 100 candidates ko dobara order karta hai. v17 abhi 0.264 pe hai.
+
+**Claude ke LB andaze** (RESULTS §33, entry 5):
+
+| model | Δ andaza | LB andaza |
+|---|---|---|
+| plan formula (bigord non-env, coverage 0.25) | +0.023 | 0.287 |
+| coverage-scaled (covered delta × 0.12) | +0.018 | 0.282 |
+| coverage 0.16 pe (entry 3 ka back-solve) | +0.023 | 0.287 |
+| pessimistic (hidden covered answers 0–1 synonym stratum jaise) | +0.015 | 0.279 |
+
+**Pre-registered threshold.**
+- v18 final selection me tabhi jaayega jab LB **≥ 0.269** ho, yaani v17 + 0.005. Ye ship rule hai, aur LB ke noise
+  (±0.003–0.005) se bahar hai.
+- 0.264–0.268 ka matlab hai ki gain noise se alag nahi hua.
+- 0.264 se neeche ka matlab hai ki transfer v13 ki tarah toota.
+
+**Khatra, pehle se likha.**
+1. *v13 jaisa badlav.* Ranker har candidate ka score badalta hai. Held-out pe ye class 3 ke 44%, class 2 ke 37% aur
+   class 1 ke 8.8% top-1 badalta hai (placeholder pe 55/400). v13 ka chetavni wala signal, ki class 1 gir raha tha,
+   yahan nahi hai: class 1 dono splits pe badha (+0.013, +0.015).
+2. *Fingerprint ensemble ka fark.* Ranker 2-seed (bigord) aur 4-seed (big) held-out ensembles ke features pe
+   seekha. Kernel 4-seed production ensemble chalata hai. Agar `fp` ka scale badla to raw `fp` features thode khisak
+   sakte hain. Rank, gap aur z features is se bache rehte hain.
+3. *Placeholder kuch nahi batata.* Uske spectra train se hain, isliye wo quality nahi naapta (HANDOFF).
+
+**Runtime.** Features aur scoring Mac pe 18 s lete hain (34k rows). Kaggle pe ~1 min, v17 ke 84 min + ~2.5 h ke
+upar.
+
+**Andaza (user, push se pehle).** LB **0.273**, yaani v17 se +0.009. Ye threshold (0.269) se upar hai, lekin Claude ke
+pessimistic andaze (0.279) se bhi neeche.

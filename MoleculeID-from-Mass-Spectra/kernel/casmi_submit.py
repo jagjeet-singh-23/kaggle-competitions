@@ -12,6 +12,7 @@ train.parquet, which costs about 50 minutes of the 9 hours:
     analog.build()       Morgan fingerprint + exact mass    ~2 min
     analog.submit()      search + propagate over 400 mols   ~1 min
     shifted analogs      ±200 Da relatives, SHIFT_W > 0     ~20 min (6 on the Mac)
+    learned ranker       features + MetFrag-lite, 34k rows  ~1 min (18 s on the Mac)
 
 Derived artifacts go to /tmp, not /kaggle/working: the index alone is 1.3 GB and
 would otherwise be committed as notebook output.
@@ -85,6 +86,13 @@ os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
 os.environ["SHIFT_W"] = "16"
 os.environ["SHIFT_P"] = "3"
 os.environ["SHIFT_SIM"] = "entropy"
+# v18: a learned ranker re-orders each molecule's top 100 candidates (RESULTS.md section 33,
+# Raasta B component 2). It is LightGBM lambdarank over v17's terms, their in-list ranks and
+# gaps, and MetFrag-lite: how much of the spectrum the candidate's own one- and two-bond
+# fragments explain. It was trained on held-out queries whose fingerprints came from models
+# that had not seen them, and is shipped as numpy trees. fpsearch refuses to run it unless the
+# settings above are v17's, the ones its tables were built at.
+os.environ["RANKER"] = f"{CODE}/ranker_v1.npz"
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -145,7 +153,8 @@ import prior                             # noqa: E402
 step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'}, "
      f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g}, "
      f"shift w={fpsearch.SHIFT_W:g} p={fpsearch.SHIFT_P:g} {fpsearch.SHIFT_SIM}, "
-     f"{len(fingerprint.MODEL.split(','))} fingerprint models)")
+     f"{len(fingerprint.MODEL.split(','))} fingerprint models, "
+     f"ranker={os.path.basename(fpsearch.RANKER) or 'off'})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")

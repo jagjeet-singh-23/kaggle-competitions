@@ -275,24 +275,59 @@ def cv(T, k=5, drop_groups=(), model="gbm", seeds=SEEDS, params=None):
     return out
 
 
+NODE_FIELDS = ("feature_idx", "num_threshold", "missing_go_to_left", "left", "right", "is_leaf", "value")
+
+
+def _lgbm_nodes(tree):
+    """One LightGBM tree (dump_model's tree_structure) as HistGBM-style node rows in
+    preorder, children by index within the tree."""
+    out = []
+
+    def walk(n):
+        i = len(out)
+        out.append(None)
+        if "leaf_value" in n:
+            out[i] = (0, 0.0, 0, 0, 0, 1, n["leaf_value"])
+            return i
+        assert n["decision_type"] == "<=" and n["missing_type"] in ("None", "NaN"), n
+        # Missing type None (no NaN in training): LightGBM scores NaN as 0.0.
+        go_left = n["default_left"] if n["missing_type"] == "NaN" else 0.0 <= n["threshold"]
+        left, right = walk(n["left_child"]), walk(n["right_child"])
+        out[i] = (n["split_feature"], n["threshold"], go_left, left, right, 0, 0.0)
+        return i
+
+    walk(tree)
+    return out
+
+
 def export(models, feature_names, path, drop_groups=()):
-    """sklearn HistGBM trees as flat arrays, so the kernel scores without sklearn."""
-    cat = {k: [] for k in ("feature_idx", "num_threshold", "missing_go_to_left", "left",
-                           "right", "is_leaf", "value")}
+    """sklearn HistGBM or LightGBM trees as flat arrays, so the kernel scores without
+    either library. HistGBM scores are probabilities, LightGBM lambdarank's raw sums."""
+    cat = {k: [] for k in NODE_FIELDS}
     offsets, tree_model, baseline, n = [0], [], [], 0
+    lgbm = hasattr(models[0], "booster_")
+    assert all(hasattr(m, "booster_") == lgbm for m in models), "one kind of model per export"
     for mi, m in enumerate(models):
-        baseline.append(float(np.ravel(m._baseline_prediction)[0]))
-        for it in m._predictors:
-            nodes = it[0].nodes
+        if lgbm:
+            baseline.append(0.0)
+            trees = []
+            for t in m.booster_.dump_model()["tree_info"]:
+                rows = _lgbm_nodes(t["tree_structure"])
+                trees.append({k: np.array([r[j] for r in rows]) for j, k in enumerate(NODE_FIELDS)})
+        else:
+            baseline.append(float(np.ravel(m._baseline_prediction)[0]))
+            trees = [it[0].nodes for it in m._predictors]
+        for nodes in trees:
             for k in cat:
                 cat[k].append(nodes[k])
-            n += len(nodes)
+            n += len(nodes["value"])
             offsets.append(n)
             tree_model.append(mi)
     np.savez(path, **{k: np.concatenate(v) for k, v in cat.items()},
              offsets=np.array(offsets), tree_model=np.array(tree_model),
              baseline=np.array(baseline), feature_names=np.array(feature_names),
-             drop_groups=np.array(drop_groups, dtype="U16"))
+             drop_groups=np.array(drop_groups, dtype="U16"),
+             link=np.array("identity" if lgbm else "logistic"))
 
 
 class Ranker:
@@ -307,10 +342,12 @@ class Ranker:
         assert tuple(r.feature_names.tolist()) == used_features(drop), \
             f"{path} was trained on other features than features.FEATURES minus {drop}"
         r.cols = columns(drop)
+        r.link = str(r.__dict__.get("link", "logistic"))
         return r
 
     def score(self, X):
-        """X has every column of features.FEATURES; returns the mean probability."""
+        """X has every column of features.FEATURES; returns the mean over the models of
+        the probability (HistGBM) or the raw score (lambdarank), as score() does."""
         X = np.asarray(X, np.float64)[:, self.cols]
         raw = np.repeat(self.baseline[:, None], len(X), 1)
         rows = np.arange(len(X))
@@ -326,6 +363,8 @@ class Ranker:
                 left = (x <= self.num_threshold[g]) | (np.isnan(x) & self.missing_go_to_left[g].astype(bool))
                 node = np.where(inner, np.where(left, self.left[g], self.right[g]), node)
             raw[mi] += self.value[lo + node]
+        if self.link == "identity":
+            return raw.mean(0)
         return (1.0 / (1.0 + np.exp(-raw))).mean(0)
 
 
@@ -494,6 +533,26 @@ def _selftest_model():
     # LightGBM lambdarank: one booster per seed, finite scores.
     lr = fit(T, model="lambdarank", seeds=(0, 1), params={"n_estimators": 20})
     assert len(lr) == 2 and np.isfinite(score(lr, T["X"], "lambdarank")).all()
+    # ... exported to the same flat arrays, scored raw as score() does.
+    with tempfile.TemporaryDirectory() as d:
+        export(lr, features.FEATURES, f"{d}/lr.npz")
+        r = Ranker.load(f"{d}/lr.npz")
+        assert np.abs(r.score(T["X"]) - score(lr, T["X"], "lambdarank")).max() < 1e-9
+        # Values exactly on a split threshold go left, as LightGBM's do.
+        inner = np.flatnonzero(~r.is_leaf[:r.offsets[1]].astype(bool))[:8]
+        Xt = np.repeat(T["X"][:1], 8, 0).astype(np.float64)
+        for i in inner:
+            Xt[i % 8, r.feature_idx[i]] = r.num_threshold[i]
+        assert np.abs(r.score(Xt) - score(lr, Xt, "lambdarank")).max() < 1e-9
+        # NaN goes where LightGBM sends it: trained without NaN, it scores NaN as 0.0.
+        Xn = T["X"][:60].astype(np.float64)
+        Xn[::3] = np.nan
+        Xn[1::3, :5] = np.nan
+        assert np.abs(r.score(Xn) - score(lr, Xn, "lambdarank")).max() < 1e-9
+        m3 = fit(T, drop_groups=("frag",), model="lambdarank", seeds=(0,), params={"n_estimators": 20})
+        export(m3, used_features(("frag",)), f"{d}/lr_nofrag.npz", drop_groups=("frag",))
+        assert np.abs(Ranker.load(f"{d}/lr_nofrag.npz").score(T["X"])
+                      - m3[0].predict(T["X"][:, columns(("frag",))])).max() < 1e-9
     # paired bootstrap of identical lists is exactly zero.
     a = np.r_[np.ones(10), np.zeros(10)]
     assert paired_bootstrap(a, a) == (0.0, 0.0, 0.0)
@@ -564,11 +623,12 @@ def _cv_main():
 
 def _fit_main():
     paths, opt, drop = _args()
+    model = opt.get("model", "gbm")
     T = load_tables(paths)
-    models = fit(T, drop_groups=drop)
+    models = fit(T, drop_groups=drop, model=model)
     export(models, used_features(drop), opt["out"], drop_groups=drop)
     r = Ranker.load(opt["out"])
-    err = np.abs(r.score(T["X"][:5000]) - score(models, T["X"][:5000][:, columns(drop)])).max()
+    err = np.abs(r.score(T["X"][:5000]) - score(models, T["X"][:5000][:, columns(drop)], model)).max()
     assert err < 1e-9, err
     print(f"wrote {opt['out']}: {len(models)} models, {len(r.tree_model)} trees, "
           f"numpy vs sklearn max |diff| {err:.1e}")
