@@ -1284,7 +1284,7 @@ Scoring took ~2.5 h against v15's ~70 min. That is unexplained: either the hidde
 more spectra, or the run was queued. Kaggle's file matches the local SW 16 file on 396 of
 400 lists (2 reorders, 1 top-1 change). x86-vs-ARM near-ties are suspected, not verified.
 
-## 33. A learned ranker over v17's top 100, with MetFrag-lite: covered class 3 0.523 -> 0.688
+## 33. A learned ranker over v17's top 100, with MetFrag-lite: covered class 3 0.523 -> 0.688 held-out, LB 0.264 -> 0.257
 
 **Features** (`features.py`, 27 in 9 groups). For each query, v17's candidate list is scored
 as v17 scores it, and the top `N_RERANK = 100` rows are kept. Rank, gap and z versions of
@@ -1453,5 +1453,28 @@ strong (`top_spec ≥ 0.8`: bigord 0.9235 → 0.9442) and weaker matches (0.9229
 | pessimistic: hidden covered answers like the 0–1 stratum (+0.125) | +0.015 |
 
 All four clear the +0.005 ship rule. The risk is v13's: this ranker re-scores every
-candidate, and v13 won held-out and fell on the LB. The ship decision is made in Task 7 with
-the kernel in hand.
+candidate, and v13 won held-out and fell on the LB.
+
+**Leaderboard: v18 (v17 + `ranker_v1.npz`) scored 0.257, against v17's 0.264** (submission
+57599879). That is −0.007, against predictions of +0.015 to +0.023 and the user's +0.009, so
+the sign was wrong. The pre-registered reading for anything below 0.264 was "the transfer broke
+like v13's", and v18 is not selected. v17 stays first and v15 second.
+
+The kernel ran as tested. It took 88.7 min, with 95 s of features and 4 s of scoring over
+33,569 rows. Its placeholder file matches the local smoke file on 396 of 400 lists: one top-1
+and three top-25 sets differ, from Linux-vs-Mac float drift. Scoring took ~85 min.
+
+One LB point cannot split the loss between classes. If classes 1 and 2 moved as held-out did
+(+0.0038), real class 3 fell by ~0.015. If class 3 did not move, class 1 fell by ~0.05.
+
+v13, v16 and now v18 each re-scored every candidate with something fitted or chosen on held-out
+query lists. All three won held-out and lost the LB, by −0.007, −0.014 and −0.007. v12's
+fingerprint model also re-scored every candidate, but it was trained on library spectra, and it
+transferred (+0.016). The bootstrap intervals above measure sampling noise inside the held-out
+split. They do not measure the gap between held-out and hidden queries, and that gap decided
+this result.
+
+The diagnostics are in `LEARNING.md` entry 6. The cheapest is to run the shipped artifact with
+the production ensemble on held-out queries that neither the ranker nor the fingerprint models
+saw. `kernel/casmi_submit.py` is back at v17. `RANKER` and `RANK_BY` stay in `fpsearch.py` and
+are off by default; with them off, the output is byte-identical to v17's.

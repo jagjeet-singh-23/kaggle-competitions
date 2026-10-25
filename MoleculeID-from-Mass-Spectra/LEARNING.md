@@ -407,3 +407,75 @@ upar.
 
 **Andaza (user, push se pehle).** LB **0.273**, yaani v17 se +0.009. Ye threshold (0.269) se upar hai, lekin Claude ke
 pessimistic andaze (0.279) se bhi neeche.
+
+**Measured.** v18 **0.257** (submission 57599879), yaani v17 se **−0.007**. Rounding ke saath ye −0.006 se −0.008
+ke beech hai. Pehle se likhi shart ke hisaab se ye teesri category hai: **transfer v13 ki tarah toota**. v18 final
+selection me nahi jaata. v17 pehla aur v15 dusra rehta hai, jaise pehle tha.
+
+| model | Δ andaza | LB andaza | asli − andaza |
+|---|---|---|---|
+| plan formula | +0.023 | 0.287 | −0.030 |
+| coverage-scaled | +0.018 | 0.282 | −0.025 |
+| coverage 0.16 pe | +0.023 | 0.287 | −0.030 |
+| pessimistic | +0.015 | 0.279 | −0.022 |
+| user | +0.009 | 0.273 | −0.016 |
+| **asli** | **−0.007** | **0.257** | |
+
+Saare andaze ek hi taraf galat hain, aur LB noise (±0.004) se 4–7 guna door. Ye noise nahi hai: held-out ka
+**sign** hi galat nikla. User ka andaza sabse kam galat tha, kyunki wo sabse savdhaan tha. Lekin wo bhi sign nahi
+pakad paaya.
+
+**Kernel theek chala.** Kernel 88.7 min chala. Features 95 s me bane aur scoring 4 s me hui, 33,569 rows pe. 400 me
+se 399 lists v17 se alag order me thi. Placeholder pe kernel ki file local smoke file se 396/400 lists pe mili: 1 ka
+top-1 alag tha aur 3 ke top-25 sets alag the. Rows ki ginti same thi, to pools same the. Ye Linux aur Mac ka chhota
+float fark hai, jo LB ke −0.007 ko samjha nahi sakta. Score aane me ~85 min lage (21:36 → 23:02). To v17 ke 2.5 ghante
+shayad Kaggle ki queue the, zyada spectra nahi.
+
+**Kya ulta-solve hota hai.** LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Ek LB point teen unknowns ko alag nahi kar
+sakta, wo sirf do kinare deta hai:
+- Agar class 1 aur 2 held-out jaise chale (+0.0038), to asli class 3 ~**0.015** gira: (−0.007 − 0.0038) / 0.735.
+- Agar class 3 bilkul na hila, to class 1 ko ~**0.05** girna padta (0.007 / 0.140). Ye held-out ke +0.013 ke ulta hai.
+
+LB ye nahi batata ki inme se kaunsa hua. Ise alag karne ke liye ya to probe chahiye, ya aisa local test jo hidden test
+ke zyada kareeb ho.
+
+**Global badlav ka record.**
+
+| ver | badlav | held-out | LB |
+|---|---|---|---|
+| v12 | fp model + in-pool ranking loss, gamma 32 | jeeta | **+0.016** |
+| v13 | fp term normalise, tau tez | class 3 jeeta, class 1 gira | −0.007 |
+| v16 | PubChem pool + prior w 1 | jeeta | −0.014 |
+| v17 | shifted analogs, sirf rishtedaar wale molecule hile | +0.0035 se +0.011 | **+0.007** |
+| v18 | learned ranker, har candidate dobara score | +0.015 se +0.023 | −0.007 |
+
+Entry 3 ka andaza tha ki jo badlav sirf kuch molecules ko, kisi khaas wajah se, hilata hai, wo zyada bharose se
+transfer hota hai. v18 is andaze ke saath fit baithta hai. Lekin v12 bhi har candidate ko hilata tha aur transfer
+hua. Ek fark dikhta hai:
+- v12 ka model *train library* ke spectra pe seekha.
+- v13 ke tau/gamma, v16 ka pool aur v18 ke 500 trees *held-out query lists* pe chune ya seekhe gaye.
+
+Jo cheez held-out lists pe fit hoti hai, wo held-out ki khaasiyat bhi seekh leti hai. Ye abhi teen cases pe andaza
+hai, rule nahi.
+
+**Bootstrap interval ne kya nahi dekha.** Covered class 3 ka +0.165 [+0.148, +0.181] tha, aur interval zero se bahut
+door tha. Interval sirf held-out ke andar ka sampling noise naapta hai. Held-out aur hidden test ka fark wo nahi
+naapta, aur yahan wahi fark sabse bada nikla. Kitna bhi tight interval ho, wo transfer ki guarantee nahi deta.
+
+**Kyun toota: andaze, jaanch ke saath.**
+1. *Artifact ya ensemble ka fark* (pehle se likha khatra 2). Ranker 2-seed aur 4-seed held-out ensembles pe seekha,
+   jabki kernel production ensemble chalata hai. Jaanch (local, free): shipped `ranker_v1.npz` ko production
+   ensemble ke saath un held-out queries pe chalao jo na ranker ne dekhi na fp model ne (`splits.npz` ki queries,
+   ranker ki tables wale structures hata ke). Agar wahan bhi gain dikhe, to bug ya mismatch wajah nahi hai.
+2. *Popularity.* Ranker `prior` pe tika hai (ablation: covered −0.014). v17 ka prior sirf top_spec < 0.8 pe aur w
+   0.5 pe lagta tha, aur v16 ka prior w 1 gira tha. Agar hidden answers held-out se kam documented hain, to ye
+   nuksaan karega. Iske khilaf ek baat: held-out ke 0–1 synonym stratum me bhi gain tha (+0.125).
+3. *Class 1.* Ranker class 1 ke 8.8% top-1 badalta hai. Probe ka idea: ranker sirf top_spec < 0.8 pe chalao, taaki
+   class 1 jaise molecules v17 pe rahein. Isse LB ka nuksaan class 1 aur class 3 me baant sakte hain.
+
+**Belief jo badli.** Entry 3 ke baad maine likha tha ki ranking ka kaam LB pe dikh sakta hai. Isme ab ek shart
+judti hai: jo ranking *held-out lists pe seekhi* jaati hai, uska held-out gain LB ka andaza nahi hai, chahe wo kitna
+bhi bada aur tight ho. Component 3–4 ke andaze isi hisaab se padhne honge.
+
+**Final selection.** Badla nahi: v17 pehla, v15 dusra. `kernel/casmi_submit.py` wapas v17 pe hai. `RANKER` knob
+`fpsearch` me hai, aur default me off hai.
