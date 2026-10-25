@@ -583,3 +583,109 @@ Iska like-for-like reference bigord ka in-list gain **+0.1125** hai, `big` ka +0
 (aadha) +0.056 hoti, aur measured +0.068 use paar karta. Lekin n = 15 pe interval [+0.007, +0.148] dono references
 ko dhak leta hai, to nateeja wahi rehta hai: class 3 ki reading kuch tay nahi karti, aur faisla class 1 se hua.
 Tumhara andaza +0.113 bilkul isi bigord reference ke barabar tha.
+
+## 8. Kya top_spec < 0.8 pe gate karne se ranker class 1 ko chhodkar class 3 jeet leta hai? (2026-10-25)
+
+**Sawaal.** Entry 7 me class 1 un queries pe toota jahan library match strong tha: khoye hue cases me top_spec 0.94
+tha. v17 khud prior ko top_spec < 0.8 pe gate karta hai. Ab ranker ko bhi usi gate pe chalao. top_spec ≥ 0.8 wali
+queries v17 ke order pe rahengi, aur baaki ranker ke order pe.
+
+**Threshold pehle se tay hai.** 0.8 v17 ka `PRIOR_GATE` hai. Ise `splits.npz` pe sweep nahi kiya jaayega. Agar kiya,
+to `splits.npz` test set nahi rahega, tuning set ban jaayega. Isiliye ek hi number chalega.
+
+**Readings.** Wahi 586 ansune molecules aur wahi shipped `ranker_v1.npz` (`data/jobs/xfer_gate.py`). Saath me
+out-of-fold reference bhi usi gate ke saath. Power entry 7 jaisi hai: class 1 n = 193 (±~0.04), class 3 in-list
+n = 15 (±~0.07).
+
+**Pre-registered rule.** Gated ranker tabhi LB probe (v19) ke laayak hai jab dono shartein poori hon:
+- class 1 ka delta ≥ −0.01, aur uska interval −0.03 se neeche na jaaye;
+- class 3 in-list delta > 0.
+
+LB ka andaza: 0.140 × Δc1 + 0.126 × Δc2 + 0.735 × 0.13 × Δc3_inlist.
+
+**Andaza (user, reading se pehle).** **+0.06**. Claude ise class 3 in-list ka andaza maan raha hai, kyunki class 1 ke
+liye +0.06 ceiling ke paas (0.998) hota. Class 1 ka andaza nahi diya gaya.
+
+**Claude ka andaza.**
+- Class 1 **−0.01** (−0.03 se +0.01). Gate khoye hue strong-match cases wapas laata hai. Lekin kamzor match wali
+  class 1 queries me bhi `internal` wali galti ho sakti hai. Out-of-fold me unka gain +0.007 tha.
+- Class 3 in-list **+0.05**. Ungated +0.068 tha, aur gate kuch strong-match class 3 queries ka gain bhi le jaayega.
+- Iska LB andaza ≈ −0.0014 + 0.0016 + 0.735 × 0.13 × 0.05 ≈ **+0.005**, jo ship rule ke bilkul kinare pe hai.
+
+**Measured** (`data/jobs/xfer_gate.py`):
+
+| reading | n | v17 pe rakhi gayi (top_spec ≥ 0.8) | ungated delta | **gated delta** [95%] | gated out-of-fold (big / bigord) |
+|---|---|---|---|---|---|
+| class 1 | 193 | 150 | −0.1256 | **−0.0187** [−0.035, −0.007] | +0.0052 / +0.0034 |
+| class 2 | 196 | 18 | +0.0128 | +0.0128 [+0.003, +0.026] | +0.0127 / +0.0122 |
+| class 3 in-list | 15 | 1 | +0.0684 | **+0.0684** [+0.007, +0.148] | +0.1398 / +0.1091 |
+| class 3 non-env | 54 | 2 | +0.0190 | +0.0190 [+0.002, +0.040] | +0.1301 / +0.0260 |
+
+**Andazon se fark.**
+- Class 3 in-list: user ne +0.06 kaha, Claude ne +0.05, aur asli +0.068 aaya. Gate ne class 3 in-list ki 15 me se
+  sirf 1 query ko chhua. Isliye class 3 lagbhag waise hi raha, aur dono andaze noise ke andar sahi hain.
+- Class 1: Claude ka −0.01 (−0.03 se +0.01) tha. Asli −0.0187 range ke andar hai, lekin shart ke bahar.
+
+**Rule ka faisla: gated ranker v19 probe ke laayak nahi.** Class 1 ka delta −0.0187 hai, jo −0.01 se neeche hai, aur
+interval −0.035 tak jaata hai. LB formula 0.140 × (−0.0187) + 0.126 × 0.0128 + 0.735 × 0.13 × 0.0684 = +0.0055 deta
+hai, jo ship rule ke theek kinare pe hai. Lekin uska class 3 hissa sirf 15 queries se aata hai: 95% range +0.001 se
++0.014 tak. Pehle se likhi shart class 1 ke nuksaan ko is noise ke saamne daao pe lagane se rokti hai. Wo shart
+jaan-boojh ke likhi gayi thi.
+
+**Naya: kamzor match wali class 1 bhi tootti hai.** 193 me se 150 queries gate se v17 pe chali gayi. Bachi 43 queries
+pe poora nuksaan −0.0187 × 193 / 43 ≈ **−0.084 per query** hai. Out-of-fold me inhi queries pe gain tha:
++0.0052 × 400 / 203 ≈ +0.010. To gate sirf lakshan dabata hai. Bimari, ki ranker library candidates ko neecha dikhata
+hai, kamzor matches me bhi maujood hai. Entry 7 ka `internal` flip yahan bhi wajah hai ya nahi, ye abhi naapa nahi
+gaya.
+
+`splits.npz` ki class 1 me 78% queries top_spec ≥ 0.8 pe hain. big aur bigord me ye ~49% hai.
+
+**Belief jo badli.** Gate ek patch hai, ilaaj nahi. Asli ilaaj training me hai:
+- ranker ko aisi class 1 dikhani hogi jo `splits.npz` jaisi ho;
+- ya `internal` ke saath class ka andaza lagane ka raasta band karna hoga.
+Jo bhi badlav ho, use `splits.npz` pe padhna hai, aur uska threshold `splits.npz` pe tune nahi karna hai.
+
+## 9. Kamzor match wali class 1 me bhi kya `internal` hi top 1 chheenta hai? (2026-10-25)
+
+**Sawaal.** Entry 8 me gate ke baad bhi 43 class 1 queries (top_spec < 0.8) pe ranker ne ~−0.084 per query
+gawaya. Entry 7 me strong matches pe 36 me se 34 khoye hue top-1 (94%) sirf `internal` badalne se wapas aa gaye the.
+Kya kamzor matches me bhi yahi wajah hai, ya wahan `fp` aur `prior` jaise dusre features hain?
+
+**Test** (`data/jobs/xfer_weak.py`). Wahi 586 ansune molecules aur shipped `ranker_v1.npz`. Sirf class 1 ki
+top_spec < 0.8 wali queries jahan v17 answer ko rank 1 pe rakhta tha aur ranker nahi. Har case me naye top-1 ko
+answer ki ek feature value do, ek baar me ek feature. Gino ki kitne cases me sirf wahi badlav answer ko wapas upar
+laata hai.
+
+**Power note (reading se pehle).** 43 queries ka kul nuksaan −0.084 × 43 ≈ −3.6 RR hai. Ek khoya top-1 aam taur pe
+0.5–0.9 RR ka hota hai, to ye ~5–8 cases honge. Itne n pe ek percentage ±30% tak hil sakta hai. Ye reading sirf
+moti baat kahegi: `internal` zyadatar cases me hai (≥ 2/3), ya kuch hi me (≤ 1/3).
+
+**Andaza (user, reading se pehle).** **73**. Claude ise 73% maan raha hai, kyunki cases 43 se zyada nahi ho sakte.
+
+**Claude ka andaza.** **~60%**. `internal` ab bhi main wajah hai. Lekin kamzor match me answer ka `spec` kam hai, to
+`fp`, `prior` ya `shift` jaise features bhi akele flip kar sakte hain. Isliye strong matches ke 94% se kam.
+
+**Measured** (`data/jobs/xfer_weak.py`). 43 molecules me se 10 ne RR khoya aur 1 ne paaya. **5** ne rank 1 khoya, aur
+kul −3.61 RR me se −2.83 inhi 5 se aaya. Swap test me **5 me se 5** sirf `internal` badalne se wapas aa gaye. Kisi
+aur akele feature ne ek bhi case nahi palta.
+
+Paanchon case me naya top 1 ek hi kism ka tha: external candidate, `spec` 0, v17 kam. Paanch me se chaar me uska
+`prior` zyada tha, yaani wo jaana-maana COCONUT compound tha (3.1–3.6 vs 0 ya 1.4).
+
+**Andazon se fark.** User ne 73% kaha, Claude ne ~60%, asli 100% (5/5). Power note ke bucket me "zyadatar cases me
+(≥ 2/3)" aaya. User ka andaza usi bucket me tha, Claude ka beech wale me. n = 5 pe 100% aur 73% me fark noise hai.
+Lekin bucket ka fark asli hai.
+
+**Kul tasveer (entries 7–9).** Class 1 ke 41 khoye hue top-1 me se **39** sirf `internal` se palat-te hain, strong aur
+kamzor dono match me. Ranker ne `internal = 0` ko "ye class 3 ka answer ho sakta hai" ka signal bana liya hai. Ye
+signal itna bhari hai ki 0.3–0.9 ka library match aur v17 ke 3–11 points ki badhat bhi use nahi rok paati. Bimari ek
+hi feature me hai, poore model me nahi.
+
+**Agla qadam (abhi andaza, plan nahi).** Ranker v2 me `internal` ko class ka proxy banne se rokna hai. Teen raaste:
+- (a) `internal` hata do. Lekin `has_spec` lagbhag wahi baat batata hai, to signal wahan chala ja sakta hai.
+- (b) LightGBM ka monotone constraint: `internal` aur `has_spec` score ko kabhi neeche na le jaayein. Isse class 3 ka
+  "library compound se bacho" wala signal bhi band ho sakta hai.
+- (c) Class 1 ko `splits.npz` jaisi banaana. Iske liye training me ek aur split chahiye, taaki `splits.npz` test hi
+  rahe.
+
+Har raasta `splits.npz` ke 586 molecules pe, bina tuning ke, padha jaayega. Class 1 ki shart entry 8 wali hogi.
