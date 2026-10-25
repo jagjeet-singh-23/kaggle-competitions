@@ -85,6 +85,10 @@ os.environ["PRIOR_META"] = f"{CODE}/coconut_meta.npz"
 os.environ["SHIFT_W"] = "16"
 os.environ["SHIFT_P"] = "3"
 os.environ["SHIFT_SIM"] = "entropy"
+# v18 set RANKER=f"{CODE}/ranker_v1.npz": a LightGBM lambdarank ranker re-ordering each
+# molecule's top 100 with MetFrag-lite features (RESULTS.md section 33). It won held-out
+# covered class 3 by +0.165 and scored 0.257 against v17's 0.264 (LEARNING.md entry 6),
+# so this file is back at v17. fpsearch leaves RANKER off unless it is set.
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -145,7 +149,8 @@ import prior                             # noqa: E402
 step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or 'raw'}, "
      f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g}, "
      f"shift w={fpsearch.SHIFT_W:g} p={fpsearch.SHIFT_P:g} {fpsearch.SHIFT_SIM}, "
-     f"{len(fingerprint.MODEL.split(','))} fingerprint models)")
+     f"{len(fingerprint.MODEL.split(','))} fingerprint models, "
+     f"ranker={os.path.basename(fpsearch.RANKER) or 'off'})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")

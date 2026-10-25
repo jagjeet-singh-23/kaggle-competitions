@@ -1,6 +1,6 @@
 # Versions this repo was developed and measured against (Linux, Python 3.10).
 # All of these publish macOS arm64 wheels, so `pip install -r requirements.txt`
-# works unchanged on Apple Silicon. See SETUP.md for the two macOS caveats.
+# works unchanged on Apple Silicon. See SETUP.md for the macOS caveats.
 
 numpy==2.2.6
 pandas==2.3.2
@@ -8,7 +8,8 @@ scipy==1.15.3
 scikit-learn==1.7.2
 pyarrow==21.0.0
 
-# LANL only. Ships its own libomp in the macOS wheel; no brew install needed.
+# LANL, and MoleculeID's ranker comparison. On macOS it needs `brew install libomp`:
+# the wheel links libomp but does not ship it (SETUP.md).
 lightgbm==4.7.0
 
 # BirdCLEF only. ai-edge-litert has NO Intel-Mac wheel -- Apple Silicon or Linux.
@@ -27,3 +28,11 @@ onnxscript==0.7.2
 rdkit==2026.3.3
 
 kaggle==1.7.4.5
+
+# Exploration and experiment tracking (Mac mini, Python 3.12, added 2026-10-24).
+# The full mlflow server runs through uvx, not this venv: it would pin pyarrow<26 (SETUP.md).
+jupyterlab==4.6.4
+ipykernel==7.4.0
+matplotlib==3.11.2
+nbstripout==0.9.1
+mlflow-skinny==3.17.2

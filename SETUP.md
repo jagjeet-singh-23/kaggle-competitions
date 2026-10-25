@@ -25,7 +25,7 @@ request 403s.
 
 ## macOS caveats
 
-There are only two, and one is fatal on the wrong hardware.
+One is fatal on the wrong hardware; the rest cost an install.
 
 **Apple Silicon is required for BirdCLEF.** `ai-edge-litert` publishes
 `macosx_12_0_arm64` wheels only — there is no Intel-Mac build. LANL and MoleculeID
@@ -33,8 +33,20 @@ have no such constraint and run on either. On an Intel Mac, either run BirdCLEF 
 Linux or drive BirdNET through `tensorflow`'s own `tf.lite.Interpreter`, which takes
 the same `experimental_preserve_all_tensors` argument.
 
-**`lightgbm` needs no `brew install libomp`.** The wheel vendors its own OpenMP
-runtime. Only a source build would need brew.
+**`lightgbm` needs `brew install libomp`.** The `macosx_12_0_arm64` wheel links
+`@rpath/libomp.dylib` and looks for it in `/opt/homebrew/opt/libomp/lib`; it does not
+vendor one (checked with `otool -L` on 4.7.0, 2026-10-24). Without brew's libomp,
+`import lightgbm` fails with `Library not loaded: @rpath/libomp.dylib`.
+
+**The Mac mini's `.venv` is uv-managed and has no pip.** Install into it with
+`uv pip install --python .venv/bin/python <pkg>`, and run `--dry-run` first: BirdCLEF
+and MoleculeID share the venv, and a resolver downgrade in one breaks the other.
+
+**MLflow is split in two.** The venv holds `mlflow-skinny` (the client), because the
+full `mlflow` pins `pyarrow<26` and would downgrade it. The tracking server and UI run
+the full package in uvx's own environment: `zsh MoleculeID-from-Mass-Spectra/mlflow_server.sh`,
+then http://127.0.0.1:5050 (not 5000, which macOS AirPlay holds). The skinny client
+cannot write sqlite or (since 3.17) a file store, so runs log through that server.
 
 Nothing else is platform-specific. `fetch_data.sh` and `guard.sh` are POSIX sh/bash
 with a `uname` branch for reading free memory, and the only Linux-ism in the Python

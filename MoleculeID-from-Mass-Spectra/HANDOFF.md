@@ -1,4 +1,4 @@
-# Handoff — CASMI 2026 (as of 2026-10-20)
+# Handoff — CASMI 2026 (as of 2026-10-24)
 
 Read RESULTS.md §11–30 first; this file is the short version plus how to run things.
 The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
@@ -10,13 +10,22 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
   component 1): spectral relatives within ±200 Da re-rank the pool, no candidates added. Predicted +0.0035
   (coverage-scaled) to +0.011 (plan formula), scored +0.007. **Select v17 for the final ranking, v15 second**
   (v15 is the same pipeline without the channel). Learning log for Raasta B: `LEARNING.md`.
+- **v18 0.257 (−0.007), not selected**: v17 plus a learned lambdarank ranker over each molecule's top 100, with
+  MetFrag-lite features (§33, Raasta B component 2). It won held-out covered class 3 by +0.165 [+0.148, +0.181] and
+  was predicted at +0.015 to +0.023. This is the third change that re-scores every candidate with something fitted
+  on held-out query lists and loses on the LB (v13 −0.007, v16 −0.014). Held-out gains from such changes are not
+  LB predictions, however tight their intervals (`LEARNING.md` entry 6).
 - v15 0.257 = v14 + a 4-seed fingerprint ensemble (§29); **v14 0.254**: v12 (search + analog + predicted-fingerprint tanimoto, gamma 32, one adduct window per
   molecule (§14), fingerprint model fine-tuned with a **ranking loss over the 5 ppm candidate pool**, §21–22)
   plus a **COCONUT synonym-count prior** (`PRIOR=syn PRIOR_W=0.5 PRIOR_GATE=0.8`, §28). The prior gave +0.002;
   the eval scaled by class 3 coverage predicted +0.005 ± 0.003 (§30), so the two agree within the LB's noise.
 - Class mix pinned (§7): LB ≈ 0.140·c1 + 0.126·c2 + 0.735·c3. Class 3 is 73.5% of the score.
-- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v17 (0.264)**. `kernel/casmi_submit.py`
-  is v15's config plus `SHIFT_W=16`; `kernel/kernel-metadata.json` is v15's. v17's code dataset version is v15's
+- Kaggle kernel `jagjeetsingh23/casmi26-search-analog` latest version is **v18 (0.257)**; v17 (0.264) is version 17.
+  `kernel/casmi_submit.py` is back at v17: v15's config plus `SHIFT_W=16`, with `RANKER` unset. `kernel/kernel-metadata.json`
+  is v15's. The code dataset's latest version is v18's: v17's folder plus `features.py`, `metfrag.py`, `ranker.py`,
+  `formula.py`, the new `fpsearch.py` and `ranker_v1.npz`. With `RANKER` unset that `fpsearch.py` writes v17's file
+  byte for byte, so pushing this `casmi_submit.py` against it reproduces v17. v18's folder is in the c2 worktree's
+  `kernel/code/`, built by `data/jobs/kcode_build.sh`. v17's code dataset version is v15's
   `kernel/code/` with this tree's `fpsearch.py` and `shifted.py` on top (`data/jobs/kcode_build.sh`, which also proves
   the folder reproduces the locally tested SW 16 file). v16 (0.243) was the failed PubChem popularity pool (§31).
   v15 (0.257) is
@@ -50,6 +59,7 @@ The next experiments, and how to run them on the Mac, are in **PLAN_MAC.md**.
 | v15 | v14 + 4-seed fingerprint ensemble (§29) | 0.257 |
 | v16 | v15 + PubChem 2+ synonym pool (16M), prior w 1 (§31) | 0.243 (pool expansion closed again) |
 | v17 | v15 + mass-shifted analogs, SW 16, entropy, p 3 (§32) | **0.264** |
+| v18 | v17 + learned ranker over the top 100, lambdarank with MetFrag-lite (§33) | 0.257 (held-out +0.165 covered c3 did not transfer) |
 
 ## Read first: what looks like a fact but is not
 
@@ -130,13 +140,19 @@ selection only if it beats its pre-registered threshold.
 1. **(Done, v17 0.264) Mass-shifted analogs**: plan `docs/superpowers/plans/2026-10-20-mass-shifted-analogs.md`,
    §32, `LEARNING.md` entries 1–3. The LB back-solves class 3 coverage to ~0.16 (0.07–0.25 with noise) against the
    0.12 rule below. That leans higher but does not overturn the rule.
-2. **Next: learned ranker with MetFrag-lite features** (spec component 2). Its features must come from a fingerprint
-   model that has not seen the ranker's training queries. A ranker re-scores every candidate, as v13's scoring did, so
-   read its held-out gain through both LB models.
-3. Gated PubChem channel (fixed slots, not merged into the pool), then our own timsTOF forward model (spec 3–4).
+2. **(Done, v18 0.257, did not transfer) Learned ranker with MetFrag-lite features**: plan
+   `docs/superpowers/plans/2026-10-24-learned-ranker.md`, §33, `LEARNING.md` entries 4–6. MetFrag-lite separates
+   exact isomers at AUC 0.734 and is the ranker's most distinctive feature. **Why it reversed** (entry 7, §33
+   transfer test): on `splits.npz`'s 586 unseen molecules with the production ensemble, class 1 falls 0.938 → 0.812.
+   The ranker prefers external candidates over strong library matches (`internal` flips 34 of 36 lost top-1s), and
+   `splits.npz` class 1 has 5× the training splits' share of `top_spec ≥ 0.9`. Class 3 still gains. That predicts
+   the LB's −0.007 with real class 3 near +0.012. Next, local and free: the ranker gated to `top_spec < 0.8`, read on
+   that table (prediction first). Any retrained ranker must be read on a split built differently from its training
+   splits.
+3. Gated PubChem channel (fixed slots, not merged into the pool), then our own timsTOF forward model (spec 3–4). Read
+   their held-out gains with entry 6 in mind: anything fitted on held-out lists needs an LB probe before belief.
 
-Timing: v17's scoring run took ~2.5 h (v15 ~70 min), unexplained. Budget new kernel time on top of that, not on top of
-the 84 min commit run.
+Timing: v18's kernel ran 89 min and its scoring ~85 min. v17's ~2.5 h of scoring was most likely Kaggle's queue.
 
 ## Next steps (picked 2026-10-18, after v15; superseded by Raasta B above)
 
@@ -288,7 +304,7 @@ SPLITS=data/splits_big.npz FP_MODEL=data/fpmodel_big_<name>.pt FRACS=1 GAMMA=32 
   MIN_AVAIL_MB=2500 ../guard.sh python3 dilute.py            # add C2_BANNED=1 for the second run
 ```
 
-## Kaggle submit workflow (~66 min kernel + ~70 min scoring at v15; v17: 84 min + ~2.5 h)
+## Kaggle submit workflow (~66 min kernel + ~70 min scoring at v15; v17: 84 min + ~2.5 h; v18: 89 min + ~85 min)
 
 Claude Code's auto mode refuses `kaggle datasets version`, `kaggle kernels push` and `kaggle competitions submit`
 as writes to a connected app; the user runs them with `!`. Status polls and `kaggle kernels output` are read-only.
