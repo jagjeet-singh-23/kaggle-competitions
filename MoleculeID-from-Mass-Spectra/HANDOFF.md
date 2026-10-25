@@ -146,9 +146,12 @@ selection only if it beats its pre-registered threshold.
    transfer test): on `splits.npz`'s 586 unseen molecules with the production ensemble, class 1 falls 0.938 → 0.812.
    The ranker prefers external candidates over strong library matches (`internal` flips 34 of 36 lost top-1s), and
    `splits.npz` class 1 has 5× the training splits' share of `top_spec ≥ 0.9`. Class 3 still gains. That predicts
-   the LB's −0.007 with real class 3 near +0.012. Next, local and free: the ranker gated to `top_spec < 0.8`, read on
-   that table (prediction first). Any retrained ranker must be read on a split built differently from its training
-   splits.
+   the LB's −0.007 with real class 3 near +0.012. Gating the ranker to `top_spec < 0.8` (entry 8) leaves class 1 at
+   −0.019 [−0.035, −0.007], which fails the pre-registered bar. The 43 weak-match class 1 molecules still lose
+   ~0.084 each, and all 5 of their lost top-1s also flip on `internal` alone (entry 9). In all, 39 of 41 lost class 1
+   top-1s are this one feature. **Next: ranker v2**, which keeps `internal` from acting as a class proxy. The options
+   are to drop it, to put monotone constraints on `internal` and `has_spec`, or to train on a class 1 that looks like
+   `splits.npz`'s. Read it on `splits.npz`'s 586 molecules without tuning anything there.
 3. Gated PubChem channel (fixed slots, not merged into the pool), then our own timsTOF forward model (spec 3–4). Read
    their held-out gains with entry 6 in mind: anything fitted on held-out lists needs an LB probe before belief.
 

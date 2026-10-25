@@ -1509,3 +1509,14 @@ the same splits.
 
 These tables share the eval protocol (`C2_BANNED`, `TRUE_ADDUCT`, banned index) with the training
 tables, so the test isolates the split and the ensemble, not the kernel's protocol.
+
+**The gate does not cure it** (`LEARNING.md` entries 8–9; `data/jobs/xfer_gate.py`,
+`xfer_weak.py`). The ranker was applied only where `top_spec < 0.8`, v17's fixed prior gate, with
+no sweep on this table. That sends 150 of the 193 class 1 molecules back to v17's order, and
+class 1 is still −0.0187 [−0.035, −0.007]. Class 3 in-list is unchanged at +0.0684, since only
+one of its 15 molecules is gated.
+
+The 43 class 1 molecules below the gate lose 0.084 each on average, where out-of-fold they
+gained 0.010. Five of them lose rank 1, and in all five the new top 1 is an external candidate
+with no spectral match; giving it `internal = 1` alone restores the answer. Across entries 7–9,
+39 of 41 lost class 1 top-1s flip on `internal` alone.
