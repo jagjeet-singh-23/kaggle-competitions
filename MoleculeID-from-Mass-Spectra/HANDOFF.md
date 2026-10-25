@@ -142,11 +142,13 @@ selection only if it beats its pre-registered threshold.
    0.12 rule below. That leans higher but does not overturn the rule.
 2. **(Done, v18 0.257, did not transfer) Learned ranker with MetFrag-lite features**: plan
    `docs/superpowers/plans/2026-10-24-learned-ranker.md`, §33, `LEARNING.md` entries 4–6. MetFrag-lite separates
-   exact isomers at AUC 0.734 and is the ranker's most distinctive feature. The open question is why the held-out gain
-   reversed. The cheapest diagnostic is local and free: run the shipped `ranker_v1.npz` with the production ensemble on
-   `splits.npz` queries that neither the ranker's tables nor the fingerprint models contain. If the gain holds there,
-   the break is held-out vs hidden, not the artifact. A probe that applies the ranker only where `top_spec < 0.8`
-   would split the LB loss between class 1 and class 3.
+   exact isomers at AUC 0.734 and is the ranker's most distinctive feature. **Why it reversed** (entry 7, §33
+   transfer test): on `splits.npz`'s 586 unseen molecules with the production ensemble, class 1 falls 0.938 → 0.812.
+   The ranker prefers external candidates over strong library matches (`internal` flips 34 of 36 lost top-1s), and
+   `splits.npz` class 1 has 5× the training splits' share of `top_spec ≥ 0.9`. Class 3 still gains. That predicts
+   the LB's −0.007 with real class 3 near +0.012. Next, local and free: the ranker gated to `top_spec < 0.8`, read on
+   that table (prediction first). Any retrained ranker must be read on a split built differently from its training
+   splits.
 3. Gated PubChem channel (fixed slots, not merged into the pool), then our own timsTOF forward model (spec 3–4). Read
    their held-out gains with entry 6 in mind: anything fitted on held-out lists needs an LB probe before belief.
 

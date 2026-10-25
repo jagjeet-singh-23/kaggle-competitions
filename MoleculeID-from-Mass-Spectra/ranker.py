@@ -33,7 +33,8 @@ K = 25                     # MRR@25
 TABLE_VERSION = 1
 # The split a fingerprint model family left out. A model is only valid on the split
 # whose rows it excluded (HANDOFF, Models); every other pairing leaks.
-LEAK_FREE = {"splits_big.npz": "fpmodel_big_", "splits_bigord.npz": "fpmodel_bigord_"}
+LEAK_FREE = {"splits_big.npz": "fpmodel_big_", "splits_bigord.npz": "fpmodel_bigord_",
+             "splits.npz": "fpmodel_rank"}
 N_PROC = max(1, (os.cpu_count() or 4) - 2)
 
 
@@ -447,11 +448,16 @@ def selftest():
             raise SystemExit(f"leak not caught: {bad}")
         except AssertionError:
             pass
-    try:
-        check_leak_free("data/splits.npz", "/x/fpmodel_rank.pt")
-        raise SystemExit("a split without a leak-free model family was accepted")
-    except AssertionError:
-        pass
+    # splits.npz is the production ensemble's own held-out split, the transfer test for a
+    # shipped ranker; only that family may score it.
+    check_leak_free("data/splits.npz", "/x/fpmodel_rank.pt,/x/fpmodel_rank_s1.pt")
+    for split, bad in (("data/splits.npz", "/x/fpmodel_big_rank_s0.pt"),
+                       ("data/splits_c1env.npz", "/x/fpmodel_c1env.pt")):
+        try:
+            check_leak_free(split, bad)
+            raise SystemExit(f"leak not caught: {split} with {bad}")
+        except AssertionError:
+            pass
     # Hand table. Class 3: q0 answer at rank 2; q1 at rank 1 with a second positive at 3;
     # q2 has no positive. Class 1: q3's answer at rank 26 earns nothing (MRR@25).
     # q4 (class 3, enveda-180) has no rows at all and still counts.

@@ -1478,3 +1478,34 @@ The diagnostics are in `LEARNING.md` entry 6. The cheapest is to run the shipped
 the production ensemble on held-out queries that neither the ranker nor the fingerprint models
 saw. `kernel/casmi_submit.py` is back at v17. `RANKER` and `RANK_BY` stay in `fpsearch.py` and
 are off by default; with them off, the output is byte-identical to v17's.
+
+**Transfer test** (`LEARNING.md` entry 7; `data/jobs/xfer_read.py`, `xfer_c1.py`, `xfer_qmap.py`).
+The table is `splits.npz` built with the production ensemble, which excluded those rows. It has
+586 molecules that are in neither ranker table. The shipped `ranker_v1.npz` was scored on it:
+
+| reading | n | v17 | ranker | delta [95%] | out-of-fold |
+|---|---|---|---|---|---|
+| class 1 | 193 | 0.9380 | 0.8124 | **−0.1256** [−0.164, −0.088] | +0.0148 / +0.0134 |
+| class 2 | 196 | 0.0444 | 0.0573 | +0.0128 [+0.003, +0.026] | +0.0132 / +0.0155 |
+| class 3 in-list | 15 | 0.6307 | 0.6991 | +0.0684 [+0.007, +0.148] | +0.1773 / +0.1125 |
+| class 3 non-env | 54 | 0.1752 | 0.1942 | +0.0190 [+0.002, +0.040] | — / +0.0268 |
+
+The out-of-fold column is big / bigord.
+
+Class 1 collapses where cross-validation said it rose. That alone predicts −0.018 on the LB,
+which leaves real class 3 at about +0.012, inside the coverage-scaled range.
+
+The fingerprint features did not shift: class 1 answers' `fp` is 0.347 against 0.333 and 0.330.
+Quantile-mapping each of 14 features onto `big`'s marginal, one at a time, recovers nothing.
+The queries did shift: 61% of `splits.npz` class 1 molecules have `top_spec ≥ 0.9`, against
+12.5% in both training splits.
+
+36 class 1 answers lose rank 1, each to an external candidate with no spectral match. In 34
+of them, giving that candidate the answer's `internal = 1` alone restores the answer. The ranker
+learned to prefer external candidates even against a 0.93 library match. Class 3 answers are
+always external and carry 73.5% of the weight, and the training splits' high-`top_spec` queries
+are mostly class 3 by weight. Cross-validation could not see this, because its class 1 came from
+the same splits.
+
+These tables share the eval protocol (`C2_BANNED`, `TRUE_ADDUCT`, banned index) with the training
+tables, so the test isolates the split and the ensemble, not the kernel's protocol.

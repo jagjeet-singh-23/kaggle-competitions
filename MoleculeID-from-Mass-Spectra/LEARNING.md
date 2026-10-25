@@ -479,3 +479,107 @@ bhi bada aur tight ho. Component 3–4 ke andaze isi hisaab se padhne honge.
 
 **Final selection.** Badla nahi: v17 pehla, v15 dusra. `kernel/casmi_submit.py` wapas v17 pe hai. `RANKER` knob
 `fpsearch` me hai, aur default me off hai.
+
+## 7. Kya shipped ranker un queries pe bhi jeetta hai jo usne kabhi nahi dekhi? (2026-10-25)
+
+**Sawaal.** v18 LB pe −0.007 gira (entry 6). Do kahaniyan hain, aur dono ka ilaaj alag hai:
+- **A: artifact ya ensemble ka fark.** Shipped `ranker_v1.npz` production ensemble ke features pe theek se kaam nahi
+  karta. Wo held-out ensembles (`big` 4-seed, `bigord` 2-seed) pe seekha tha. Ye theek kiya ja sakta hai.
+- **B: held-out aur hidden ka fark.** Ranker sahi chalta hai, lekin held-out queries hidden test jaisi nahi hain. Is
+  case me held-out pe koi bhi seekhi hui ranking LB ka andaza nahi deti.
+
+**Test (local, free).** `splits.npz` production ensemble ka apna held-out split hai: production ensemble ne iski rows
+nahi dekhi. Isme 600 structures hain, har class ke 200.
+
+*Sudhaar, review ke baad:* pehle yahan "1,958 queries, 45 overlap" likha tha. Wo spectra ki ginti thi. Structures
+ke hisaab se 14 ranker ke training splits me bhi hain. Unhe hata do.
+
+Bachi queries pe shipped `ranker_v1.npz` ko production ensemble ke features ke saath chalao. Phir use experiment 4 ke
+out-of-fold numbers se milao, ek jaise readings pe.
+
+*Sudhaar:* pehle yahan "bilkul kernel ki tarah" likha tha. Ye poora sach nahi hai. Table eval protocol se banti hai:
+`C2_BANNED=1`, `TRUE_ADDUCT=1` (adduct answer ke mass se chuna jaata hai), aur banned index structures. Kernel inme
+se kuch nahi karta. Training tables bhi isi protocol se bani thi, to ye test sirf split aur ensemble ka fark alag
+karta hai. Kernel ke protocol ka fark isme nahi aata.
+
+Main reading hai *class 3 in-list*: class 3 ki wo queries jinka answer v17 ke top 100 me hai. Out-of-fold
+reference: `big` covered +0.165 / ceiling 0.93 ≈ **+0.177**. Class 1 ka reference +0.013 hai.
+
+**Pre-registered rule.**
+- splits.npz pe class 3 in-list gain ≥ reference ka aadha (≥ +0.09): artifact theek hai, aur kahani **B** hai.
+- Gain +0.09 se kam ho, ya negative: kahani **A**. Production features pe ranker toot-ta hai, aur feature shift
+  table batayegi kahan.
+- Class 1 alag se padhna hai, kyunki LB ka ulta-solve class 1 ke ~0.05 girne ko bhi allow karta hai (entry 6).
+
+**Claude ka andaza.** Kahani B. Production ensemble aur `big` ensemble ek hi config ke 4 seeds hain, sirf alag rows
+chhodi gayi hain, to `fp` ke features ek jaise hone chahiye. Class 3 in-list **+0.13** (+0.09 se +0.17), aur class 1
++0.01 ± 0.01.
+
+**Andaza (user, reading se pehle).** Class 3 in-list **+0.113**, class 1 negligible. Ye bhi kahani B hai (≥ +0.09),
+lekin Claude se thoda neeche: reference (+0.177) ka 64%, jabki Claude ka andaza 73% tha.
+
+**Power note (table banne ke baad, reading se pehle).** `build_jobs` ki unit structure hai, spectrum nahi.
+`splits.npz` me har class ke 200 structures hain, aur class 3 me sirf **16** ka answer v17 ke top 100 me hai.
+(Uska class 3 coverage 8% hai, jabki `big` ka class 3 covered hi chuna gaya tha.)
+
+Experiment 4 me covered class 3 ka interval 1,000 queries pe ±0.0165 tha. Usse per-query delta ka SD ~0.27 nikalta
+hai. n = 16 pe 95% interval lagbhag **±0.14** hoga. Isliye class 3 in-list reading sirf kinaron pe kuch kehti hai:
+- Upper bound +0.09 se neeche (measured ≲ −0.05): kahani A.
+- Lower bound +0.09 se upar (measured ≳ +0.23): kahani B.
+- Beech me: reading kuch tay nahi karti. Tab dono andaze, +0.113 aur +0.13, bhi test nahi hote.
+
+**Class 1 (199 in-list)** asli faisla karne wali reading ban jaati hai. Interval ~±0.02 hoga. Entry 6 ka dusra
+kinara, class 1 ka ~0.05 girna, isme saaf dikhega. Feature-shift table rows pe hai, isliye kam n se kam prabhavit
+hoti hai.
+
+**Measured** (`data/jobs/xfer_read.py`; 586 ansuni structures, 42,757 rows):
+
+| reading | n | v17 | ranker | delta [95%] | out-of-fold reference |
+|---|---|---|---|---|---|
+| class 1 | 193 | 0.9380 | 0.8124 | **−0.1256** [−0.164, −0.088] | +0.0148 big, +0.0134 bigord |
+| class 2 | 196 | 0.0444 | 0.0573 | +0.0128 [+0.003, +0.026] | +0.0132, +0.0155 |
+| class 3 in-list | 15 | 0.6307 | 0.6991 | +0.0684 [+0.007, +0.148] | +0.1773 big, +0.1125 bigord |
+| class 3 non-env | 54 | 0.1752 | 0.1942 | +0.0190 [+0.002, +0.040] | +0.0268 bigord |
+
+**Andazon se fark.**
+- Class 3 in-list beech me gira, aur power note ke hisaab se kuch tay nahi karta. Dono andaze (+0.113, +0.13) interval
+  ke andar hain, isliye na sahi sabit hote hain na galat.
+- Class 1 ne faisla kiya. Tumhara andaza "negligible" tha aur Claude ka +0.01. Asli −0.126 hai, interval zero se
+  bahut door.
+
+**LB se mel.** 0.140 × (−0.126) + 0.126 × (+0.013) = −0.016. LB −0.007 tha, to asli class 3 ~**+0.012** badha hoga:
+(−0.007 + 0.016) / 0.735. Ye coverage-scaled range me baithta hai: 0.13 × 0.068 ≈ +0.009 se 0.12 × 0.177 ≈ +0.021
+tak. Ek kahani teeno numbers samjha deti hai: class 3 ka gain transfer hua, aur class 1 ke collapse ne use kha liya.
+Ye tabhi sach hai jab hidden class 1 `splits.npz` ki class 1 jaisi ho. Ye maana gaya hai, naapa nahi.
+
+**Na A, na B: query ka shift, fp ka nahi** (`xfer_c1.py`, `xfer_qmap.py`).
+- *fp features nahi khiske.* Class 1 answers ka `fp` 0.347 / 0.333 / 0.330 hai, aur `fp_z` 2.9 / 3.2 / 3.2
+  (splits, big, bigord). Ek-ek feature ko big ke marginal pe quantile-map karke dekha, 14 features pe. Koi bhi class 1
+  ko 0.82 se upar nahi le gaya. To shipped artifact ya ensemble toota nahi hai. Kahani A galat hai.
+- *Queries khiski.* `splits.npz` ki class 1 me 61% queries ka top_spec ≥ 0.9 hai, jabki big aur bigord me 12.5%.
+  Wahan answer ka `spec` median 0.93 hai, aur training me 0.77.
+- *Kya palta.* 36 queries ne rank 1 khoya. Har baar naya top 1 ek external candidate tha: spec 0, `internal` 0, v17
+  20 vs 28. 36 me se **34** me sirf `internal` badalne se answer wapas upar aa jaata hai. Ranker external candidates
+  ko inaam deta hai, kyunki class 3 ka answer hamesha external hota hai. Class 3 training weight ka 73.5% hai, aur
+  training me top_spec ≥ 0.9 wali queries bhi weight ke hisaab se zyadatar class 3 ki thi
+  (0.735 × 4.5–7.3% vs 0.140 × 12.5%). To ranker ne seekha: "strong library match ho tab bhi external pe daao lagao".
+  Jab class 1 me strong matches 5 guna zyada hon, ye rule class 1 ko tod deta hai.
+
+Ye kahani B ka ek naapa ja sakne wala roop hai. Held-out splits ki class 1 hidden test jaisi nahi thi, aur iska asar
+local test me dikh gaya. LB tak jaane ki zaroorat nahi padi.
+
+**Belief jo badli.**
+1. Out-of-fold CV ne class 1 pe +0.015 kaha, kyunki CV ki class 1 bhi wahi khaas class 1 thi. Ek alag split
+   (`splits.npz`) ne jhooth pakad liya. Agle har learned component ko kam se kam ek aise split pe padhna hai jo training
+   splits se alag tarah bana ho.
+2. Class ke hisaab se weights (MIX) ek query-type feature (`internal`) ke saath milke "kaun si class hai" ka andaza
+   training ke mix se seekh lete hain. Jab test me wo mix badle, ranker ka andaza galat ho jaata hai.
+
+**Agla (local, free).** v17 khud prior ko top_spec < 0.8 pe gate karta hai. Ranker ko bhi sirf top_spec < 0.8 pe
+chalao, aur baaki ko v17 ke order pe chhod do. Ye isi table pe naapa ja sakta hai. Lekin isse pehle andaza likhna hoga.
+
+**Sudhaar, final review ke baad: reference.** `splits.npz` ek ordinary split hai, `big` jaisa covered split nahi.
+Iska like-for-like reference bigord ka in-list gain **+0.1125** hai, `big` ka +0.177 nahi. Us hisaab se shart
+(aadha) +0.056 hoti, aur measured +0.068 use paar karta. Lekin n = 15 pe interval [+0.007, +0.148] dono references
+ko dhak leta hai, to nateeja wahi rehta hai: class 3 ki reading kuch tay nahi karti, aur faisla class 1 se hua.
+Tumhara andaza +0.113 bilkul isi bigord reference ke barabar tha.
