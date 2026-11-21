@@ -89,6 +89,22 @@ os.environ["SHIFT_SIM"] = "entropy"
 # molecule's top 100 with MetFrag-lite features (RESULTS.md section 33). It won held-out
 # covered class 3 by +0.165 and scored 0.257 against v17's 0.264 (LEARNING.md entry 6),
 # so this file is back at v17. fpsearch leaves RANKER off unless it is set.
+#
+# v19 (LEARNING.md entry 12): a PubChem channel. The pop2 pool (16M PubChem structures
+# with two or more synonyms) is scored by v17's own total as a second pool, and its best
+# six structures that are neither training structures nor COCONUT's take fixed slots in
+# v17's list: ranks 2, 4, 6, 8, 10, 24 when the channel leader's predicted-fingerprint
+# tanimoto beats every candidate in v17's top 25, else 4, 8, 12, 16, 20, 24. Molecules
+# whose library match reaches cosine 0.9 keep v17's list, and rank 1 never moves. On
+# splits_bigord it took non-enveda-180 class 3 from 0.151 to 0.239 and cost class 1
+# 0.0035. v16 merged the same pool into v17's list instead and lost 0.014 (section 31).
+# fpsearch reads CHANNEL_OUT at import; COCONUT comes first so that the merge keeps
+# COCONUT's copy of a structure both hold, as in the held-out run.
+POOLS = find_all("shard_000.npz")
+PUBCHEM = [d for d in POOLS if "pubchem-pop2" in d]
+COCONUT = [d for d in POOLS if d not in PUBCHEM]
+assert len(PUBCHEM) == 1 and COCONUT, f"expected COCONUT and one pop2 pool, found {POOLS}"
+os.environ["CHANNEL_OUT"] = ":".join(COCONUT + PUBCHEM)
 
 import library            # noqa: E402
 import analog             # noqa: E402
@@ -126,9 +142,10 @@ fingerprint.MODEL = ",".join(f"{CODE}/{m}" for m in
 # Rules section 2.6 permits external data that is publicly available, free and equally
 # accessible; COCONUT is CC0.
 import external          # noqa: E402
-# Both pool datasets, colon-joined; external.merge deduplicates across them.
-external.OUT = ":".join(find_all("shard_000.npz"))
-print(f"candidate pools: {external.OUT}", flush=True)
+# v17's list draws on COCONUT only; pop2 reaches the submission through the channel
+# (CHANNEL_OUT above), never by merging into this pool.
+external.OUT = ":".join(COCONUT)
+print(f"candidate pool: {external.OUT}; channel pools: {fpsearch.CHANNEL_OUT}", flush=True)
 
 t0 = time.time()
 step = lambda s: print(f"[{(time.time() - t0) / 60:5.1f} min] {s}", flush=True)
@@ -150,7 +167,8 @@ step(f"submission written (gamma={fpsearch.GAMMA:g}, norm={fpsearch.FP_NORM or '
      f"prior={prior.PRIOR or 'off'} w={prior.W:g} gate={prior.GATE:g}, "
      f"shift w={fpsearch.SHIFT_W:g} p={fpsearch.SHIFT_P:g} {fpsearch.SHIFT_SIM}, "
      f"{len(fingerprint.MODEL.split(','))} fingerprint models, "
-     f"ranker={os.path.basename(fpsearch.RANKER) or 'off'})")
+     f"ranker={os.path.basename(fpsearch.RANKER) or 'off'}, "
+     f"channel={'pop2' if fpsearch.CHANNEL_OUT else 'off'})")
 
 import pandas as pd                      # noqa: E402
 sub = pd.read_csv("/kaggle/working/submission.csv")

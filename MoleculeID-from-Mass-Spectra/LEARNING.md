@@ -926,3 +926,35 @@ channel ke andar ranking achhi hai (65% top 6 me, 40% channel ka #1). v16 ka nuk
 tha. Ye v17 ke baad pehli cheez hai jiska LB andaza noise se kaafi upar hai. Agla qadam v19 kernel hai: v17 + ye
 channel, bilkul isi rule ke saath (gate 0.9, rel > 0, slots field wale, koi promotion nahi). Push sirf user ki haan ke
 baad.
+
+## 13. Kya PubChem channel LB pe bhi utna hi deta hai? (v19, 2026-11-21)
+
+**Sawaal.** Entry 12 ka LB andaza +0.032 … +0.053 tha. v19 = v17 + channel, bilkul entry 12 ke rule ke saath:
+gate 0.9, rel > 0 pe aggressive slots, warna gentle, rank 1 promotion nahi. Kernel me main list ka code v17 ka hi
+hai. Channel off pe local file v17 ki tested file se byte-for-byte milti hai, aur channel ka pool COCONUT + pop2 hai.
+
+**Pre-registered padhna** (v17 = 0.264; LB noise ±0.003–0.005; ek molecule ≈ 0.008):
+- **v19 ≥ 0.274** (+0.010 ya zyada): channel hidden pe bhi kaam karta hai. v19 final selection me v17 ki jagah lega.
+- **0.259 … 0.274:** saboot nahi. Hidden pe pop2 ki coverage held-out se bahut kam hai, ya gain noise me chhup gaya.
+  Final selection v17 hi rahegi.
+- **v19 < 0.259:** channel nuksaan karta hai. Slots ne hidden ke main-list answers ko neeche dhakela. Entry 12 me ye
+  nuksaan ~−0.002 tha (class 1 0.140 × −0.0035, class 3 down cases 0.735 × 0.5 × −0.0035), to ye uska ~3 guna hoga.
+
+Back-solve: Δ = 0.140 × Δc1 + 0.126 × Δc2 + 0.735 × Δc3. Δc1 ≈ −0.0035 aur Δc2 ∈ [0, +0.17] maan ke, hidden class 3
+ka gain = (Δ − 0.140 × (−0.0035) − Δc2_term) / 0.735.
+
+**Andaza (user, push se pehle).** **0.284** (Δ +0.020).
+
+**Claude ka andaza** (user ke baad, push se pehle). **0.289** (0.264 se 0.314), yaani Δ +0.025. Entry 12 ka formula
++0.032 … +0.053 deta hai. Usse neeche rakhne ki do wajahein hain:
+- pool wali cheezon ka held-out andaza LB pe hamesha zyada nikla hai (v16, ChEMBL);
+- field ke −0.055 me rank 1 promotion aur behtar fingerprint models bhi shaamil the, jo hamare channel me nahi hain.
+
+Neeche ka kinara (0.264) asli sambhavna hai: agar hidden ke official class 2 answers pop2 me kam hain.
+
+**Local checks (push se pehle).**
+- Channel off: `kernel/code` se bani file v17 ki tested file se byte-for-byte milti hai (`kcode_v19.sh`).
+- Channel on, placeholder test: 381 me se 381 untouched, kyunki ye molecules train se hain. 19 lists badli, aur
+  `chan_check.py` pass hui.
+- Stress run, gate band karke saare 400 pe: rank 1 aur v17 ka kram har list me bacha, naye candidates sirf slots
+  pe. 8 min chala, jisme channel ka hissa ~1–2 min tha.
