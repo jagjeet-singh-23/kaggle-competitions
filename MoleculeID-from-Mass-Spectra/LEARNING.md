@@ -689,3 +689,137 @@ hi feature me hai, poore model me nahi.
   rahe.
 
 Har raasta `splits.npz` ke 586 molecules pe, bina tuning ke, padha jaayega. Class 1 ki shart entry 8 wali hogi.
+
+## 10. Kya ranker ranks 2+ pe, v17 ka rank 1 lock karke, class 1 bachaate hue class 3 jeet-ta hai? (2026-11-21)
+
+**Sawaal.** Public kernels ka sabse pakka sabak (2026-11-21 review): jo seekhi hui cheez rank 1 hilaati hai wo LB pe
+haarti hai, aur jo sirf ranks 2–25 ko chhooti hai ("leader-safe") wo tie karti hai ya thoda jeet-ti hai. Unka neural
+scorer rank 1 pe w 0.5 pe −0.024 gira, aur sirf ranks 2–25 pe (w_mid 0.75) +0.004 utha. Entries 7–9 me class 1 ke
+41 me se 39 khoye top-1 `internal` ki wajah se the. Kya rank 1 lock karna hi ranker v2 ka kaam kar deta hai?
+
+**Design (pehle se tay, ek hi variant).** Har query me v17 ka rank 1 wahi rehta hai. Shipped `ranker_v1.npz` v17 ke
+top 100 ke baaki 99 ko order karta hai. Koi top_spec gate nahi. Ranks 1–2 lock wala variant nahi chalega, taaki
+`splits.npz` pe kuch tune na ho. Wahi 586 ansune molecules, aur out-of-fold reference bhi isi lock ke saath.
+
+**Pre-registered rule** (entry 8 wala). Ye v19 LB probe ke laayak tabhi hai jab dono shartein poori hon:
+- class 1 ka delta ≥ −0.01, aur uska interval −0.03 se neeche na jaaye;
+- class 3 in-list delta > 0.
+
+LB ka andaza: 0.140 × Δc1 + 0.126 × Δc2 + 0.735 × 0.13 × Δc3_inlist. Ship rule: ≥ +0.005.
+
+**Pehle ke numbers jo andaze se pehle dikhaye gaye** (entries 7–9, kuch naya nahi padha):
+- Ungated delta: class 1 −0.126, class 2 +0.013, class 3 in-list +0.068. Gated: class 1 −0.019, baaki wahi.
+- Ungated class 1 ka nuksaan −24.2 RR tha. Strong match ki 150 queries ka −20.6 RR (36 khoye top-1) tha, aur weak
+  match ki 43 queries ka −3.61 RR. Weak me se −2.83 RR 5 khoye top-1 se aaya aur −0.78 RR baaki ranks ke hilne se.
+- v17 class 1 = 0.938, to rank 1 ke bahar sirf ~6% RR bachta hai.
+
+**Andaza (user, reading se pehle).**
+- Class 1 **+0.023**.
+- Class 3 in-list ungated ke +0.068 se **neeche**.
+- Class 2 lagbhag **zero**.
+- Rule **pass** hoga.
+
+**Claude ka andaza** (user ke baad likha, reading se pehle).
+- **Class 1 −0.005** (−0.015 se +0.003). Lock 41 top-1 wapas laata hai. Lekin jahan v17 ka leader galat hai, wahan
+  answer aksar library candidate hota hai, aur `internal` wali bimari use externals ke neeche dhakelegi. Weak hisse ka
+  ranks 2+ wala −0.004 isi ka namoona hai. Gain mushkil hai: lock ke baad answer ka best rank 2 (0.5) hai.
+  User ke +0.023 ke liye ~4.4 RR ka net gain chahiye, matlab ~9 answers ka rank ≥ 3 se rank 2 pe aana.
+- **Class 2 +0.008.** Ungated ke +0.013 ka kuch hissa rank 1 se aaya hoga.
+- **Class 3 in-list +0.03** (−0.02 se +0.08). User ki tarah neeche, kyunki answer ko rank 1 laana band hai.
+- **Rule:** class 1 shart pass, class 3 > 0 shayad pass. Lekin LB andaza 0.140 × (−0.005) + 0.126 × 0.008 +
+  0.0955 × 0.03 ≈ **+0.003** hai, jo ship rule (+0.005) se neeche hai.
+
+**Measured** (`data/jobs/xfer_lock.py`). Har query me top 1 v17 jaisa hi raha; script ye assert karti hai. Ungated
+column entries 7–8 se hubahu milta hai.
+
+| reading | n | v17 | ungated delta | **locked delta** [95%] | up / down | RR up / down | locked out-of-fold (big / bigord) |
+|---|---|---|---|---|---|---|---|
+| class 1 | 193 | 0.9380 | −0.1256 | **−0.0070** [−0.015, −0.001] | 4 / 8 | +0.21 / −1.56 | −0.0014 / −0.0020 |
+| class 2 | 196 | 0.0444 | +0.0128 | +0.0025 [+0.000, +0.007] | 3 / 0 | +0.50 / 0 | +0.0042 / +0.0067 |
+| class 3 in-list | 15 | 0.6307 | +0.0684 | **+0.0197** [+0.002, +0.043] | 4 / 1 | +0.33 / −0.03 | +0.0442 / +0.0241 |
+| class 3 non-env | 54 | 0.1752 | +0.0190 | +0.0055 [+0.000, +0.012] | 4 / 1 | +0.33 / −0.03 | — / +0.0057 |
+
+**Rule ka faisla: dono shartein pass.** Class 1 −0.0070 hai (≥ −0.01), aur interval −0.015 tak hi jaata hai
+(−0.03 se upar). Class 3 in-list +0.0197 hai (> 0).
+
+**Lekin LB pe ye dikhega nahi.** 0.140 × (−0.0070) + 0.126 × 0.0025 + 0.0955 × 0.0197 = **+0.0012**. Ye ek molecule
+(~0.008) ka saatvan hissa hai. Ship rule (+0.005) se bahut neeche, aur LB noise (±0.003–0.005) ke andar. Isliye v19
+probe nahi: LB +0.001 aur 0 me fark nahi kar sakta.
+
+**Andazon se fark.**
+- Class 1: user +0.023, Claude −0.005 (−0.015 se +0.003), asli −0.0070. User ka sign ulta nikla. Lock ke baad gain ke
+  liye answer ko rank ≥ 3 se rank 2 pe aana tha. Aise sirf 4 cases hue, kul +0.21 RR, jabki +0.023 ke liye ~4.4 RR
+  chahiye tha. 8 cases neeche gaye (−1.56 RR).
+- Class 3 in-list: dono ne "neeche" kaha (Claude +0.03), asli +0.0197. Dono sahi.
+- Class 2: user "lagbhag zero" sahi. Claude ka +0.008 interval [+0.000, +0.007] se thoda bahar.
+- Rule: user ne "pass" kaha, sahi. Claude ka LB andaza +0.003 tha, asli +0.001. Dono ship rule se neeche.
+
+**Asli seekh: ranker ki class 3 jeet zyadatar rank 1 pe thi.**
+- Lock ne class 3 in-list ka gain ~70% kaata: +0.068 → +0.020. Bade out-of-fold sets pe bhi yahi hua: big +0.177 →
+  +0.044 (n = 930), bigord +0.113 → +0.024. Ye n = 15 ka noise nahi hai.
+- Out-of-fold class 1 ka +0.015 bhi poora rank 1 se tha. Lock ke baad wo teeno sets pe thoda negative hai
+  (−0.001 se −0.007, down cases up se ~2 guna). Ranks 2+ pe bhi ranker library answers ko thoda neeche karta hai.
+  Ye `internal` wali kahani se mel khaata hai, lekin swap test se naapa nahi gaya.
+- Matlab ranker ki value aur uska nuksaan ek hi jagah hain: rank 1 ke move. Field ke leader-safe layers isliye
+  sirf tie ya +0.004 dete hain. Lock risk hata deta hai, lekin uske saath value ka ~3/4 hissa bhi chala jaata hai.
+
+**Belief jo badli.** Rank 1 lock ranker v2 ka shortcut nahi hai. Wo safe hai, lekin LB pe kuch nahi deta. Ranker
+ka faayda tabhi milega jab rank 1 ke move class 1 ke liye safe ho jaayein, yaani `internal` ka proxy band ho
+(entry 9 ke raaste a–c). Aur tab bhi upper bound chhota hai: poora ungated class 3 gain bhi 0.0955 × 0.068 ≈
++0.0065 LB hai. Class 3 pe ranking ka har gain coverage (~0.13) se guna hota hai. Isliye agla lever coverage hai
+(entry 11), ranking nahi.
+
+## 11. Held-out class 3 ke kitne answers PubChem me hain, lekin hamare pool me nahi? (2026-11-21)
+
+**Sawaal.** Public pipeline ka sabse bada naapa hua asar PubChem channel hai: PubChem-only candidates hatane pe
+0.464 → 0.409. Wo PubChem ko pool me nahi milate, alag fixed slots pe rakhte hain. Channel ki pehli shart coverage
+hai: kitne answers PubChem me hain jo hamare pool me nahi hain.
+
+Yaad rahe: official class 3 PubChem me hota hi nahi (HANDOFF). Hamari "class 3" = official class 2 + 3, to PubChem
+sirf official class 2 wala hissa jeet sakta hai.
+
+**Andaza (user, 2026-11-21, kuch bhi padhne se pehle).** **30–37%** (beech 33.5%). Sawaal tha: "class 3 held-out ke
+kitne % answers PubChem se aa sakte hain jo hamare pool me nahi hain?"
+
+**Reading kaise hogi** (andaza likhne ke baad tay ki gayi; user badal sakta hai):
+- Denominator: `splits_bigord.npz` ki class 3 ke 302 non-`enveda-180` answers (RESULTS §31 wala set).
+  `enveda-180` screening compounds hain, test jaise nahi. Inme se 76 pehle se COCONUT me hain, to ceiling
+  226 / 302 = 75% hai.
+- Numerator: answer ka key14 PubChem me hai, aur v17 ke pool me nahi hai.
+- Do readings: `ext_pubpop2` (MIN_SYN ≥ 2, 15.96M, jo Kaggle pe chal sakta hai) aur poora PubChem (`CID-SMILES.gz`).
+
+HANDOFF me ek milta-julta number pehle se hai: `splits_bigord.npz` ki **saari** class 3 pe pubpop2 ne coverage
+7.6% → 69% kiya, lekin uska zyadatar hissa `enveda-180` tha. User ka andaza ye number yaad dilaane se pehle diya gaya.
+
+**Measured** (`data/jobs/pubcov.py`, 26 s). Pehle ek check: saari 1000 class 3 pe COCONUT 7.6%, pop2 68.9% aur dono
+milke 69.4% aaye. Ye §31 se hubahu milta hai.
+
+| class 3 | n | COCONUT (v17 pool) | pop2 | **pop2, COCONUT me nahi** | NP-PubChem, COCONUT me nahi | dono milke |
+|---|---|---|---|---|---|---|
+| non-`enveda-180` | 302 | 76 (25.2%) | 207 (68.5%) | **136 (45.0%)**, 95% ~[39%, 51%] | 31 (10.3%) | 212 (70.2%) |
+| saari (check) | 1000 | 76 (7.6%) | 689 (68.9%) | 618 (61.8%) | 32 (3.2%) | 694 (69.4%) |
+
+pop2-only answers ke synonyms:
+- non-env (136): 2 synonym wale 18, 3–4 wale 32, 5–9 wale 47, 10+ wale 39. Median **6**.
+- saari (618): 2 synonym wale 399. Median **2**, yaani zyadatar `enveda-180` ke vendor-ID wale Enamine compounds.
+
+**Andaze se fark.** User ka andaza 30–37% tha, asli **45.0%** [39%, 51%]. Andaza interval se neeche raha, yaani
+held-out coverage soch se zyada nikli. Claude ne B ka andaza nahi diya tha.
+
+Poore PubChem (`CID-SMILES.gz`) wali dusri reading nahi chali. Local pe uske key14 nahi hain, aur ~120M SMILES ko
+parse karne me lagbhag ek ghanta lagta. Purana REST probe (`pubchem.py`) `splits.npz` ke 200 class 3 skeletons me
+se 88.7% PubChem me paata hai.
+
+**Ye number LB ke liye kya kehta hai, aur kya nahi.**
+- Held-out non-env answers public libraries ke documented compounds hain (median 6 synonyms). Hidden test pe ye number
+  upper bound hai. Hidden pe COCONUT ki coverage ~12% (§9) hai, jabki yahan 25%. Agar pop2 bhi usi anupaat (~0.5) me
+  gire, to hidden pe pop2-only coverage ~20–25% hogi. Ye andaza hai, naapa nahi.
+- Field ka ablation (PubChem-only hataane pe −0.055) class 3 pe coverage × MRR ≈ 0.055 / 0.735 ≈ 0.075 maangta hai.
+  Misaal ke taur pe 22% coverage × 0.34 MRR. Matlab unke channel me aaya answer aksar top 3 me hota hoga.
+- v16 ne dikhaya ki coverage akele kuch nahi deti: pool me milaane se dilution ne gain kha liya (§31). Channel ka asli
+  sawaal ab ye hai ki fixed slots pe answer kis rank pe aata hai, aur main list ke kitne answers ek slot neeche
+  khisakte hain.
+
+**Belief jo badli.** Held-out pe coverage bottleneck nahi hai. 302 me se 136 answers pop2 me hain jo hamare pool me
+nahi. Rukawat channel ke andar ki ranking aur main list ka nuksaan hai. Agla qadam channel simulation hai, aur uske
+liye naye andaze chahiye.
