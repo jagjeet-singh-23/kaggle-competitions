@@ -958,3 +958,34 @@ Neeche ka kinara (0.264) asli sambhavna hai: agar hidden ke official class 2 ans
   `chan_check.py` pass hui.
 - Stress run, gate band karke saare 400 pe: rank 1 aur v17 ka kram har list me bacha, naye candidates sirf slots
   pe. 8 min chala, jisme channel ka hissa ~1–2 min tha.
+
+**Nateeja (v19, submission 58670384).** **Score nahi aaya: hidden rerun crash hua** ("Notebook Threw Exception";
+API ka `error_description`: "Your notebook hit an unhandled error while rerunning your code"). Rerun ka log Kaggle
+nahi dikhata, isliye cause sabooton se dhoondha:
+- v17 isi hidden data pe chala tha, to crash v19 ke naye, data pe nirbhar code me tha. Wahan ek hi aisi jagah hai
+  jo hidden pe alag chal sakti hai: `submit` ka `assert cands[:1] == lead`.
+- v17 ki list **khaali** hoti hai jab precursor window me na koi library spectrum ho, na index/COCONUT structure.
+  Tab v17 `"C"` likhta hai. Agar pop2 me usi mass pe structures hon, to `slot_merge([], ch, …)` channel ka item
+  rank 1 pe rakhta hai, aur assert `[] != ['X']` pe fail hota hai.
+- Held-out (splits_bigord) me 1800 me se **3** molecules aise the: sab class 3, sab non-env. Hidden ke ~294
+  class 3 pe kam se kam ek aane ki sambhavna ≈ 1 − 0.997^294 ≈ 59%.
+- **Reproduce hua:** `data/jobs/chan_repro.py` asli `fpsearch.submit` chalata hai, ek aise molecule ke saath jo
+  414.959 m/z pe hai (main pool 0, library rows 0, pop2 pool 85) →
+  `AssertionError: empty_window: the channel moved rank 1`.
+
+Placeholder test ke saare molecules train se hain, isliye unki list kabhi khaali nahi hoti. Gate band karke stress
+run me bhi ye case nahi aaya.
+
+**Fix (v19b).** `assert not lead or cands[:1] == lead`. Khaali list me bachane ko rank 1 hai hi nahi, to channel
+use bharta hai, jahan v17 ka `"C"` pakka 0 score deta tha. Saath me `slot_merge([], …)` ka module-level assert.
+Verification:
+- channel off pe v17 ki tested file se byte-for-byte same;
+- channel on, placeholder pe `chan_check.py` pass (381 / 12 / 7, pehle jaisa);
+- repro ab chalta hai, aur `empty_window` ko pop2 ke 6 candidates milte hain.
+
+Upar ke pre-registered bands aur dono andaze v19b pe waise hi laagu hain. Fix sirf khaali-list molecules ko badalta
+hai: hidden pe ~1 molecule, jahan v17 ka score 0 tha.
+
+**Sabak.** Hidden rerun me per-molecule `assert` ek molecule ki gadbad ko poore 400 ke score ki maut bana deta hai.
+Jo code sirf unseen structures pe chalta hai (khaali list, gate < 0.9), use placeholder test kabhi nahi chalata.
+Push se pehle ek synthetic "khaali window" molecule wala repro chalana chahiye.

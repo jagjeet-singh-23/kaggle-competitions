@@ -304,6 +304,7 @@ def slot_merge(base, ch, slots, n=TOP_K):
 assert slot_merge(list("ABC"), list("XY"), (2, 4)) == list("AXBYC")
 assert slot_merge(list("ABC"), [], (2, 4)) == list("ABC")
 assert slot_merge(list("A"), list("XYZ"), (4,)) == list("AXYZ")
+assert slot_merge([], list("XY"), CH_AGG) == list("XY")   # an empty base: the channel leads
 
 
 def _channel_pool(an):
@@ -434,7 +435,10 @@ def submit(path=None, gamma=GAMMA):
             lead = cands[:1]
             cands = _channel(an2, coco, cands, top, fp_raw, spec, smiles, spectra, pm, add,
                              gamma, bits, fpq, relatives, prior_of, ch_stats)
-            assert cands[:1] == lead, f"{mid}: the channel moved rank 1"
+            # An empty v17 list (no library spectrum and no index or COCONUT structure in
+            # the window, while pop2 has some) has no rank 1 to keep: the channel fills it,
+            # where v17 wrote "C". v19's hidden rerun died on this assert without `lead or`.
+            assert not lead or cands[:1] == lead, f"{mid}: the channel moved rank 1"
         rows.append((mid, ";".join(cands[:TOP_K] or ["C"])))
     if learned:
         t0 = time.time()
