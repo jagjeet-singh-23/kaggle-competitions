@@ -823,3 +823,106 @@ se 88.7% PubChem me paata hai.
 **Belief jo badli.** Held-out pe coverage bottleneck nahi hai. 302 me se 136 answers pop2 me hain jo hamare pool me
 nahi. Rukawat channel ke andar ki ranking aur main list ka nuksaan hai. Agla qadam channel simulation hai, aur uske
 liye naye andaze chahiye.
+
+## 12. PubChem channel fixed slots pe: answer kitna upar aata hai, aur main list kitna khoti hai? (2026-11-21)
+
+**Sawaal.** Entry 11: non-env class 3 ke 45% answers pop2 me hain aur COCONUT me nahi. v16 ne inhe pool me milaaya
+tha aur dilution ne gain kha liya. Field ka tareeka alag hai: PubChem ki ek alag list, jiske proposals main list ke
+fixed slots pe baithte hain. Is tarah PubChem candidate main list ke candidates se mukaabla nahi karta.
+
+**Field ka rule** (Gluzdov ke notebook ka code, 2026-11-21 padha):
+- Strong library match (`lib_max ≥ 0.9`) ya PubChem proposal na ho: list waise hi rehti hai.
+- Warna rel = PubChem leader ka fingerprint score − main pool ka sabse acha score.
+  - rel > REL_TH (600, unki units me): aggressive slots 2, 4, 6, 8, 10, 24.
+  - warna gentle slots 4, 8, 12, 16, 20, 24.
+- Rank 1 promotion (S > 6 aur pop ≥ 5, ya rel > 150) is entry me nahi hai.
+
+**Design (pehle se tay).**
+- `splits_bigord.npz`, v17 settings, `C2_BANNED=1`, `TRUE_ADDUCT=1`, bigord ensemble (s0, s1).
+- **Main list:** v17 ka order, purani COCONUT table (`splits_bigord_dcd7dba4683f.npz`) se.
+- **Channel:** ek nayi table jiska pool COCONUT + pop2 hai (v16 jaisa). Channel me wahi candidates jo na index
+  structure hain (`internal` 0) aur na COCONUT me (key14). Unka order us table ke v17 total se, aur top 6 liye
+  jaayenge. Ye candidates main list me ho hi nahi sakte, isliye duplicate nahi banenge.
+- **Gate:** top_spec ≥ 0.9 pe list waise hi rehti hai (field ka LIB_TAU).
+- **Slots, primary reading:** rel = channel leader ka `fp` − main top 25 ka sabse bada `fp`. Dono same scale pe hain.
+  rel > 0 pe aggressive slots, warna gentle. 0 hamara apna, bina tune kiya kinara hai, kyunki field ka 600 hamari
+  units me translate nahi hota. Saath me "hamesha gentle" aur "hamesha aggressive" bhi padhe jaayenge, sirf seemaon ki
+  tarah. Inme se koi chunna nahi hai.
+- **Readings:**
+  - class 1 (400), class 2 (400) aur class 3 non-env (302) ka delta, paired bootstrap;
+  - entry 11 ke 136 covered answers me se kitne channel ke top 6 me aate hain.
+
+**LB andaza (pre-registered).** 0.140 × Δc1 + [0 … 0.126] × Δc2 + 0.735 × 0.5 × Δc3_nonenv.
+- Class 2 ka term ek range hai. Plain eval me class 2 ka answer pehle se index candidate hai, to channel use kuch nahi
+  deta. `C2_BANNED` eval poora gain deta hai. Hidden sach in dono ke beech hai (HANDOFF).
+- 0.5 hidden aur held-out coverage ka anupaat hai: hidden pe COCONUT ~12% (§9), yahan 25%. Ye moota andaza hai.
+- Ship rule: ≥ +0.005. Lekin §31 ke baad held-out pe jeeti pool cheez LB slot ka sabse kamzor saboot hai, isliye
+  koi bhi LB probe ek learning probe hoga.
+
+**Andaza (user, design tay hone se pehle).**
+1. Class 3 non-env: **0.23**. Reading se pehle user ne saaf kiya ki ye MRR ka level hai, Δ nahi. v17 isi split pe
+   0.1507 hai (entry 10 ka bigord reference), to andaza **Δ +0.079** hai.
+2. Class 1: **−0.002**.
+3. 136 me se **67%** (~91) channel ke top 6 me.
+
+**Claude ka andaza** (user ke baad, reading se pehle).
+- **Top 6 me ~50%** (40–60%, ~68 answers). §31 me merged pool pe pop2-only answers ka MRR ~0.30 tha
+  (0.18 × 226 / 136). Channel me COCONUT aur index se mukaabla nahi hota, isliye unka rank behtar hoga.
+- **Class 3 non-env Δ +0.05** (+0.03 se +0.08). Lagbhag aadhe hits channel ka #1 honge (slot 2 ya 4), baaki slots
+  4–24 pe. COCONUT wale 76 answers ko slots thoda neeche dhakelenge, ~−0.005.
+- **Class 1 Δ −0.004** (−0.010 se 0). Rank 1 locked hai. Nuksaan sirf un answers ka hai jo rank 2+ pe hain aur jahan
+  top_spec < 0.9 hai.
+- **Class 2 Δ +0.08** (`C2_BANNED`). §31 me merged pop2 ne class 2 ko 0.028 → 0.27 kiya tha. Slots ise kam karenge.
+- **LB:** 0.140 × (−0.004) + [0 … 0.126 × 0.08] + 0.735 × 0.5 × 0.05 ≈ **+0.018 … +0.028**. Ye v16 ke held-out
+  andaze jaisa hi bada number hai, aur v16 LB pe −0.014 gira tha. Isliye is andaze pe bharosa kam hai.
+
+**Measured** (`data/jobs/channel_read.py`; channel table `pop2_table.py`).
+- Channel table: 1800 queries, 175,242 rows, queries same kram me (asserted).
+- Pehla build mere bug se gira. `spawn` workers ne main guard ke bina script dobara chalayi, aur memory guard ne
+  parent ko maar diya. Guard ke saath dusra build saaf chala.
+- Reading 20 s chali.
+
+Branches (1800 queries): aggressive 1035, gentle 615, untouched 148, no channel 2.
+
+| reading | n | v17 | **primary Δ** [95%] | up / down | hamesha gentle | hamesha aggressive |
+|---|---|---|---|---|---|---|
+| class 1 | 400 | 0.9232 | **−0.0035** [−0.006, −0.002] | 0 / 13 (−1.41 RR) | −0.0006 | −0.0135 |
+| class 2 (`C2_BANNED`) | 400 | 0.0348 | +0.1699 [+0.149, +0.191] | 186 / 10 | +0.0959 | +0.1906 |
+| **class 3 non-env** | 302 | 0.1507 | **+0.0878** [+0.069, +0.110] → 0.2385 | 82 / 15 (−1.06 RR) | +0.0515 | +0.0906 |
+| class 3 saari (`enveda-180` samet) | 1000 | 0.0455 | +0.1708 | 459 / 15 | +0.0950 | +0.1860 |
+
+Channel ke top 6 me answer: 136 covered me se **89 (65.4%)**. Channel ke rank ke hisaab se: #1 pe 55, #2 pe 11,
+#3 pe 6, #4 pe 6, #5 pe 7, #6 pe 4. Table ki channel rows me kahin bhi: 120.
+
+**Andazon se fark.**
+
+| | user | Claude | asli |
+|---|---|---|---|
+| class 3 non-env | level 0.23 (Δ +0.079) | Δ +0.05 (+0.03 se +0.08) | **0.2385 (Δ +0.088)**, user ka andaza interval ke andar |
+| class 1 | −0.002 | −0.004 (−0.010 se 0) | −0.0035, dono theek |
+| top 6 me | 67% | ~50% (40–60%) | **65.4%**, user lagbhag hubahu |
+| class 2 | — | +0.08 | +0.170 |
+
+User ke dono bade andaze sahi nikle, Claude ke dono kam pade. Claude ki galti: hits ka 62% (89 me se 55) channel ka
+#1 hai. Channel me answer sirf doosre pop2 decoys se ladta hai, COCONUT aur index se nahi. §31 ke merged-pool MRR
+se andaza lagana isi wajah se neeche gaya.
+
+**LB andaza (pre-registered formula).** 0.140 × (−0.0035) + [0 … 0.126 × 0.170] + 0.735 × 0.5 × 0.0878 =
+**+0.032 … +0.053**. Ship rule (+0.005) bahut aaram se paar hota hai. Agar hidden coverage held-out ka sirf chauthai
+ho (0.25), aur class 2 ka term 0 ho, tab bhi +0.016 banta hai.
+
+**Ise kitna maanein.** §31 ne sikhaaya ki pool expansion held-out pe jeet ke LB pe haarti hai. Is baar teen
+cheezein alag hain:
+1. *Dilution ka raasta band hai.* Main list ka order nahi badalta, sirf slots jitna khisakta hai. Ye nuksaan
+   naapa gaya: class 1 −0.0035, class 3 non-env ke 15 down cases −1.06 RR. v16 me hidden dilution held-out se ~6 guna
+   tha, kyunki 16M decoys answer se seedha ladte the. Yahan wo ladai channel ke andar band hai.
+2. *Field ka alag saboot.* Unka ablation (PubChem-only hataane pe −0.055) aur hamara +0.032 … +0.053 ek hi dayre me
+   hain. Do alag pipeline, do alag test (LB ablation aur held-out), ek hi jawab.
+3. *Risk jo baaki hai.* Held-out answers documented hain (median 6 synonyms). Hidden pe pop2 ki coverage kitni hai,
+   ye naapa nahi gaya. 0.5 ek moota andaza hai. Class 2 ka term `C2_BANNED` ki wajah se upar ki taraf jhuka hai.
+
+**Belief jo badli.** Pool expansion band nahi hai, bas galat tareeke se ki gayi thi. Coverage asli hai (45%), aur
+channel ke andar ranking achhi hai (65% top 6 me, 40% channel ka #1). v16 ka nuksaan coverage ka nahi, merge ka
+tha. Ye v17 ke baad pehli cheez hai jiska LB andaza noise se kaafi upar hai. Agla qadam v19 kernel hai: v17 + ye
+channel, bilkul isi rule ke saath (gate 0.9, rel > 0, slots field wale, koi promotion nahi). Push sirf user ki haan ke
+baad.
