@@ -11,6 +11,7 @@ markers = ["golden: byte-identity tests against recorded outputs (~40 min)"]
 addopts = "-m 'not golden'"
 
 [tool.ruff]
+required-version = "==0.17.6"
 target-version = "py312"
 line-length = 120
 

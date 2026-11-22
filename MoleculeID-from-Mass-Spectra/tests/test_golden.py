@@ -6,6 +6,9 @@ digests and per-case wall times. Anchored cases always assert their constants.
 
 import json
 import os
+import re
+import signal
+import time
 from pathlib import Path
 
 import golden
@@ -43,19 +46,38 @@ def test_golden_cases_shape():
     assert env["PYTHONPATH"] == str(golden.MOD)
 
 
+def test_timeout_kills_whole_process_tree(tmp_path):
+    log = tmp_path / "tree.log"
+    cmd = ["sh", "-c", "sleep 60 & echo child=$!; wait"]
+    with pytest.raises(RuntimeError, match="timed out after 1s") as exc:
+        golden.run_in_new_session(cmd, log, "tree", 1)
+    child = int(re.search(r"child=(\d+)", str(exc.value)).group(1))
+    for _ in range(50):  # the kernel reaps the killed child asynchronously
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    os.kill(child, signal.SIGKILL)
+    pytest.fail("child of the timed-out process survived")
+
+
 @pytest.mark.golden
 @pytest.mark.parametrize("name", list(golden.CASES))
 def test_golden_case(name):
     update = os.environ.get("GOLDEN_UPDATE") == "1"
     digest, minutes = golden.timed_run_case(name)
     manifest = _load()
+    where = f"{name}: output {golden.output_path(name)}, log {golden.OUT_DIR / (name + '.log')}"
     if update:
-        manifest.setdefault("_minutes", {})[name] = minutes
+        # Minutes are recorded only with a newly recorded digest, so an update run
+        # that records nothing leaves the manifest byte-identical.
         if name not in ANCHORS and name not in manifest:
             manifest[name] = digest
-        _save(manifest)
+            manifest.setdefault("_minutes", {})[name] = minutes
+            _save(manifest)
     if name in ANCHORS:
-        assert digest == ANCHORS[name]
+        assert digest == ANCHORS[name], f"digest differs from anchor for {where}"
     else:
         assert name in manifest, f"{name} has no manifest entry; run with GOLDEN_UPDATE=1"
-        assert digest == manifest[name]
+        assert digest == manifest[name], f"digest differs from manifest for {where}"

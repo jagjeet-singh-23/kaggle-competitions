@@ -170,7 +170,11 @@ The four cases share these settings. The submit env is the kernel's v17 env:
   - `fpsearch._score`, the inline loop in `fpsearch.main`, `dilute.score` and `features.molecule_rows` each recompute v17's total.
   - Replace them with one core plus per-caller extras.
   - Decide whether `fpsearch.main`'s gamma sweep, which `dilute.py` superseded, is deleted rather than ported. That needs the user's call.
+  - Before porting `fpsearch.main`, pin it with a golden or delete it (the user's call).
+  - Consider adding a list-level dump to `dilute` as a behaviour-neutral commit, recorded before `dilute.score` is merged.
 - **Phase 3, modernise and speed up:**
   - type hints and pathlib, logging instead of print, `zip(strict=True)`;
   - parallel `library.canonical_keys` (about 46 of the kernel's 66 min) and shift search.
   - Its gate also needs a timing check on the kernel.
+  - Add a `golden_cold` case before touching `canonical_keys`: `submit_v17` with a temp `CASMI_WORK` (index symlinked), running `analog.build()` then `fpsearch.submit()` as the kernel does, asserting the v17 anchor (about 45-60 min, untested sketch, verify at base first).
+  - Repeat the double-run determinism check once parallelism lands.
