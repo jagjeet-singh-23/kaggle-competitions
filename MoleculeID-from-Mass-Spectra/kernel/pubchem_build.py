@@ -22,7 +22,7 @@ import sys
 import time
 
 print("/kaggle/input contains:", flush=True)
-for dirpath, dirnames, files in os.walk("/kaggle/input"):
+for dirpath, _dirnames, files in os.walk("/kaggle/input"):
     if dirpath.count("/") - 2 <= 2:
         print(f"  {dirpath}  ({len(files)} files)", flush=True)
 
