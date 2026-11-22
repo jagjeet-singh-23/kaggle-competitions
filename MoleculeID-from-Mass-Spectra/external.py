@@ -211,7 +211,7 @@ def merge(key, smiles, mass, fp, cache=None):
     uniq = np.zeros(len(allk), bool)
     uniq[first] = True
     at = 0
-    for i, m in enumerate(masks):
+    for _i, m in enumerate(masks):
         c = int(m.sum())
         m[m] = uniq[at:at + c]
         at += c

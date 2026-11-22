@@ -18,7 +18,6 @@ the MRR below is fiction.
 import os
 import sys
 import time
-from collections import defaultdict
 
 import numpy as np
 import torch
@@ -28,7 +27,7 @@ import prior
 import shifted
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
-from fingerprint import Net, NBIN, BIN, predict
+from fingerprint import Net, BIN, predict
 from metric import mrr
 from search import Searcher, spectra_of
 
@@ -54,6 +53,14 @@ SHIFT_SIM = os.environ.get("SHIFT_SIM", "entropy")
 # ordered by their v17 column, which must reproduce the v17 file byte for byte.
 RANKER = os.environ.get("RANKER", "")
 RANK_BY = os.environ.get("RANK_BY", "")
+# CHANNEL_OUT turns on a PubChem channel (LEARNING.md entry 12): a second candidate pool
+# (external.OUT-style dirs, COCONUT first so that merge() keeps COCONUT's copy of a shared
+# key) scored by the same v17 total. Its best candidates that are neither index structures
+# nor COCONUT's take fixed slots in v17's list, as the public pipelines place PubChem
+# proposals; rank 1 is never touched. "" leaves v17's lists as they are.
+CHANNEL_OUT = os.environ.get("CHANNEL_OUT", "")
+CH_N, CH_DEPTH, CH_GATE = 6, 100, 0.9      # proposals, rows searched, library-match gate
+CH_AGG, CH_GENTLE = (2, 4, 6, 8, 10, 24), (4, 8, 12, 16, 20, 24)
 
 
 def normalise(t, how=FP_NORM):
@@ -226,6 +233,121 @@ def _learned_setup(gamma):
     return Ranker.load(RANKER)
 
 
+def _once(f):
+    """f(), computed on the first call only: the query fingerprint and the shifted-analog
+    search are needed by the channel's pool too, and must not run twice."""
+    box = []
+
+    def get():
+        if not box:
+            box.append(f())
+        return box[0]
+    return get
+
+
+def _text(s):
+    return s.decode() if isinstance(s, bytes) else s
+
+
+def _score(an, spec, smiles, spectra, pm, add, gamma, bits, fpq, relatives, prior_of):
+    """v17's total over one candidate pool: spectral + BETA * analog + gamma * predicted-
+    fingerprint tanimoto + SHIFT_W * shifted analogs + the gated prior. fpq and relatives
+    are _once callables (relatives None without shifted analogs). Returns the totals, the
+    SMILES by key, the pool rows, and each pool key's raw tanimoto."""
+    total, sm, fp_raw = dict(spec), dict(smiles), {}
+    for k, v in an.propagate(spec, pm, add).items():
+        total[k] = total.get(k, 0.0) + BETA * v
+        sm.setdefault(k, an.smiles[an.row[k]])
+    pool = an.pool(pm, add)
+    if gamma and len(pool):
+        q = fpq()
+        B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
+        inter = B @ q
+        raw = inter / np.maximum(B.sum(1) + q.sum() - inter, 1e-9)
+        for r, v, w in zip(pool, normalise(raw), raw):
+            k = an.key[r]
+            total[k] = total.get(k, 0.0) + gamma * float(v)
+            sm.setdefault(k, an.smiles[r])
+            fp_raw[k] = float(w)
+    if relatives is not None and len(pool):
+        rel = [(an.row[a], s) for a, s in relatives() if a in an.row]
+        if rel:
+            t = shifted.analog_term(an.fp[pool], an.fp[np.array([r for r, _ in rel])],
+                                    np.array([s for _, s in rel]), SHIFT_P)
+            for r, v in zip(pool, t):
+                k = an.key[r]
+                total[k] = total.get(k, 0.0) + SHIFT_W * float(v)
+                sm.setdefault(k, an.smiles[r])
+    if prior_of and max(spec.values(), default=0.0) / len(spectra) < prior.GATE:
+        for k in total:
+            total[k] += prior.W * prior_of.get(k, prior.FILL)
+    return total, sm, pool, fp_raw
+
+
+def slot_merge(base, ch, slots, n=TOP_K):
+    """The public pipelines' merge: channel items at the given 1-based final positions,
+    the base list in order everywhere else, cut to n."""
+    out, b, c = [], iter(base), iter(ch)
+    while len(out) < n:
+        nxt = next(c, None) if len(out) + 1 in slots else None
+        if nxt is None:
+            nxt = next(b, None)
+        if nxt is None:
+            nxt = next(c, None)
+        if nxt is None:
+            break
+        out.append(nxt)
+    return out
+
+
+assert slot_merge(list("ABC"), list("XY"), (2, 4)) == list("AXBYC")
+assert slot_merge(list("ABC"), [], (2, 4)) == list("ABC")
+assert slot_merge(list("A"), list("XYZ"), (4,)) == list("AXYZ")
+assert slot_merge([], list("XY"), CH_AGG) == list("XY")   # an empty base: the channel leads
+
+
+def _channel_pool(an):
+    """The channel's pool, built with external.OUT pointed at CHANNEL_OUT for the one
+    call, and the keys of the main pool's external structures (COCONUT's)."""
+    import external
+    main_out = external.OUT
+    assert CHANNEL_OUT != main_out, "CHANNEL_OUT must differ from the main pool"
+    external.OUT = CHANNEL_OUT
+    try:
+        an2 = Analog()
+    finally:
+        external.OUT = main_out
+    # Analog() swallows a missing shard directory and returns the index alone; a channel
+    # without its pool would silently ship v17.
+    assert an2.external_n > an.external_n, (an2.external_n, an.external_n)
+    return an2, set(an.key[an.n_internal:].tolist())
+
+
+def _channel(an2, coco, cands, top, fp_raw, spec, smiles, spectra, pm, add, gamma, bits,
+             fpq, relatives, prior_of, stats):
+    """v17's list with the channel's proposals in fixed slots (LEARNING.md entry 12).
+
+    A strong library match (top_spec >= CH_GATE) keeps the list. Otherwise the channel is
+    the second pool's best CH_N structures, within its top CH_DEPTH, that are neither
+    index structures nor COCONUT's. rel = the channel leader's raw tanimoto minus the
+    best in v17's top 25: positive takes the aggressive slots, else the gentle ones."""
+    if max(spec.values(), default=0.0) / len(spectra) >= CH_GATE:
+        stats["untouched"] += 1
+        return cands
+    total, sm, pool, fp2 = _score(an2, spec, smiles, spectra, pm, add, gamma, bits, fpq,
+                                  relatives, prior_of)
+    ok = {an2.key[r] for r in pool if r >= an2.n_internal} - coco
+    ranked = sorted(total.items(), key=lambda kv: -kv[1])[:CH_DEPTH]
+    ch = [k for k, _ in ranked if k in ok][:CH_N]
+    if not ch:
+        stats["no channel"] += 1
+        return cands
+    rel = fp2.get(ch[0], 0.0) - max((fp_raw.get(k, 0.0) for k, _ in top), default=-np.inf)
+    branch = "aggressive" if rel > 0 else "gentle"
+    stats[branch] += 1
+    return slot_merge(cands, [_text(sm[k]) for k in ch], CH_AGG if rel > 0 else CH_GENTLE)
+
+
 def submit(path=None, gamma=GAMMA):
     """Write submission.csv using search + analog + the predicted fingerprint.
 
@@ -250,6 +372,7 @@ def submit(path=None, gamma=GAMMA):
     from metric import validate
 
     learned = bool(RANKER or RANK_BY)
+    assert not (learned and CHANNEL_OUT), "the channel is built on v17's order, not the ranker's"
     if learned:
         import features
         ranked = _learned_setup(gamma)
@@ -261,9 +384,11 @@ def submit(path=None, gamma=GAMMA):
     si = shifted.ShiftIndex(ix) if SHIFT_W else None
     del ix                       # Searcher keeps its own masked copy; see main()
     an = Analog()
+    an2, coco = _channel_pool(an) if CHANNEL_OUT else (None, None)
+    ch_stats = dict(untouched=0, gentle=0, aggressive=0, **{"no channel": 0})
     model, bits = load_model()
     prior_of = prior.load() if prior.W else {}
-    rows, shift_s = [], 0.0
+    rows, clock = [], {"shift": 0.0}
     for mid, g in te.groupby("molecule_id"):
         spectra = [library.trim(a, b, p) + (p,)
                    for a, b, p in zip(g.ms2_mzs, g.ms2_normalized_intensities,
@@ -284,45 +409,35 @@ def submit(path=None, gamma=GAMMA):
                 t0 = time.time()
                 shift, positive = ADDUCTS[add[0]]
                 analogs = si.search(spectra, pm - shift, positive, kind=SHIFT_SIM)
-                shift_s += time.time() - t0
+                clock["shift"] += time.time() - t0
             t0 = time.time()
             _, smi, X = features.molecule_rows(an, bits, spec, smiles, pm, add, fpq, spectra,
                                                analogs, prior_of)
             feat_s += time.time() - t0
             held.append((mid, smi, X))
             continue
-        total, sm = dict(spec), dict(smiles)
-        for k, v in an.propagate(spec, pm, add).items():
-            total[k] = total.get(k, 0.0) + BETA * v
-            sm.setdefault(k, an.smiles[an.row[k]])
-        pool = an.pool(pm, add)
-        if gamma and len(pool):
-            fpq = query_fp(model, spectra)
-            B = np.unpackbits(an.fp[pool], axis=1)[:, bits].astype(np.float32)
-            inter = B @ fpq
-            t = normalise(inter / np.maximum(B.sum(1) + fpq.sum() - inter, 1e-9))
-            for r, v in zip(pool, t):
-                k = an.key[r]
-                total[k] = total.get(k, 0.0) + gamma * float(v)
-                sm.setdefault(k, an.smiles[r])
-        if si is not None and len(pool):
+        def search():
             t0 = time.time()
-            shift, positive = ADDUCTS[add[0]]
-            rel = [(an.row[a], s) for a, s in si.search(spectra, pm - shift, positive,
-                                                        kind=SHIFT_SIM) if a in an.row]
-            if rel:
-                t = shifted.analog_term(an.fp[pool], an.fp[np.array([r for r, _ in rel])],
-                                        np.array([s for _, s in rel]), SHIFT_P)
-                for r, v in zip(pool, t):
-                    k = an.key[r]
-                    total[k] = total.get(k, 0.0) + SHIFT_W * float(v)
-                    sm.setdefault(k, an.smiles[r])
-            shift_s += time.time() - t0
-        if prior_of and max(spec.values(), default=0.0) / len(spectra) < prior.GATE:
-            for k in total:
-                total[k] += prior.W * prior_of.get(k, prior.FILL)
+            shift, positive = ADDUCTS[add[0]]  # noqa: B023 -- used in this iteration
+            got = si.search(spectra, pm - shift, positive, kind=SHIFT_SIM)  # noqa: B023 -- used in this iteration
+            clock["shift"] += time.time() - t0
+            return got
+        # Both callables are used inside this iteration only, so binding the loop's
+        # spectra / pm / add late is safe.
+        fpq = _once(lambda: query_fp(model, spectra))  # noqa: B023 -- used in this iteration
+        relatives = _once(search) if si is not None else None
+        total, sm, _, fp_raw = _score(an, spec, smiles, spectra, pm, add, gamma, bits, fpq,
+                                      relatives, prior_of)
         top = sorted(total.items(), key=lambda kv: -kv[1])[:TOP_K]
-        cands = [sm[q].decode() if isinstance(sm[q], bytes) else sm[q] for q, _ in top]
+        cands = [_text(sm[q]) for q, _ in top]
+        if an2 is not None:
+            lead = cands[:1]
+            cands = _channel(an2, coco, cands, top, fp_raw, spec, smiles, spectra, pm, add,
+                             gamma, bits, fpq, relatives, prior_of, ch_stats)
+            # An empty v17 list (no library spectrum and no index or COCONUT structure in
+            # the window, while pop2 has some) has no rank 1 to keep: the channel fills it,
+            # where v17 wrote "C". v19's hidden rerun died on this assert without `lead or`.
+            assert not lead or cands[:1] == lead, f"{mid}: the channel moved rank 1"
         rows.append((mid, ";".join(cands[:TOP_K] or ["C"])))
     if learned:
         t0 = time.time()
@@ -345,7 +460,10 @@ def submit(path=None, gamma=GAMMA):
           f"{sub.smiles.str.split(';').str.len().mean():.1f} candidates each")
     if si is not None:
         print(f"shifted analogs: weight {SHIFT_W:g}, p {SHIFT_P:g}, {SHIFT_SIM}, "
-              f"search {shift_s:.0f} s over {len(sub)} molecules")
+              f"search {clock['shift']:.0f} s over {len(sub)} molecules")
+    if an2 is not None:
+        print(f"PubChem channel ({an2.external_n:,} external structures, {len(coco):,} "
+              f"COCONUT keys excluded): {ch_stats}")
 
 
 if __name__ == "__main__":

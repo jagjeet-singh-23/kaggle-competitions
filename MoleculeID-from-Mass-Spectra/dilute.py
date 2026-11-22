@@ -20,14 +20,12 @@ also tests the 0.360 ranking-quality figure section 8 derived from a single poin
 """
 import functools
 import os
-import sys
 
 import numpy as np
 
 import analog
 import library
 from analog import ADDUCTS, Analog, BETA
-import fingerprint
 import formula
 import prior
 import shifted
