@@ -20,12 +20,11 @@ rules permits it.
 free. Memory: the kernel has to hold key, smiles, mass and fingerprint for every
 candidate, about 460 bytes a row, so 119M is 55 GB against the kernel's 30. The
 NP-likeness filter cuts the set to a size that fits while keeping the kind of compound
-the test is made of; --pilot measures the survival rate before committing to a run.
+the test is made of.
 
 **Why the cheap filters come first.** MolFromSmiles runs at 9k/s, InChIKey at 5k/s and
 NP-likeness at 5k/s. Parsing all 119M is unavoidable, but only survivors pay the rest.
 
-    python3 pubchem.py --pilot           # survival rate on a strided sample
     python3 pubchem.py --build           # -> data/ext_pubchem/shard_XXX.npz
     python3 pubchem.py                   # coverage of the held-out classes
 """
@@ -194,24 +193,6 @@ def pick_threshold(target):
     return t
 
 
-def pilot(n=2_000_000, stride=53):
-    """Survival rate on a strided sample.
-
-    Strided rather than the head of the file: PubChem CIDs run roughly in deposit
-    order, so the first few million are classic small molecules and would make a
-    natural-product filter look far more generous than it is.
-    """
-    print(f"\n{len(nps):,} of {n:,} sampled rows pass the mass and fragment "
-          f"filters ({len(nps) / n:.2%})")
-    print(f"SMILES length: median {int(np.median(lens))}, "
-          f"99.9th percentile {int(np.quantile(lens, 0.999))}, max {lens.max()}")
-    print(f"\n{'NP_MIN':>8}{'kept':>10}{'of PubChem':>14}{'in memory':>12}")
-    for t in (-3, -2, -1, 0, 0.5, 1.0, 1.5, 2.0, 2.5):
-        f = float((nps >= t).mean()) * len(nps) / n
-        print(f"{t:>8.1f}{f:>9.2%}{int(f * 119e6):>14,}"
-              f"{f * 119e6 * (SMILES_MAX + 278) / 1e9:>10.1f} GB")
-
-
 def build():
     global NP_MIN, _SYN, _PMID, FIELDS
     if MIN_SYN:
@@ -309,9 +290,7 @@ def coverage():
 
 
 if __name__ == "__main__":
-    if "--pilot" in sys.argv:
-        pilot()
-    elif "--build" in sys.argv:
+    if "--build" in sys.argv:
         build()
     elif "--dedupe" in sys.argv:
         dedupe()
