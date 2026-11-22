@@ -27,6 +27,9 @@ onnxscript==0.7.2
 # version can score the same prediction differently.
 rdkit==2026.3.3
 
+# MoleculeID tests
+pytest==9.2.0
+
 kaggle==1.7.4.5
 
 # Exploration and experiment tracking (Mac mini, Python 3.12, added 2026-10-24).
