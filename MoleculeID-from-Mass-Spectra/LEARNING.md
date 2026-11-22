@@ -989,3 +989,28 @@ hai: hidden pe ~1 molecule, jahan v17 ka score 0 tha.
 **Sabak.** Hidden rerun me per-molecule `assert` ek molecule ki gadbad ko poore 400 ke score ki maut bana deta hai.
 Jo code sirf unseen structures pe chalta hai (khaali list, gate < 0.9), use placeholder test kabhi nahi chalata.
 Push se pehle ek synthetic "khaali window" molecule wala repro chalana chahiye.
+
+**Nateeja (v19b, submission 58695018, 2026-11-22).** **0.262**, v17 ke 0.264 ke saamne Δ **−0.002**, jo noise ke
+andar hai. Pre-registered band 0.259–0.274 hai: **saboot nahi, final selection v17 hi rahega.** Andaze: user 0.284
+(+0.022 upar), Claude 0.289 (+0.027 upar), entry 12 ka formula +0.032 … +0.053. Teeno 4–10 noise units door rahe.
+
+Back-solve, Δc1 = −0.0035 maan ke:
+- **Class 2 term 0:** hidden Δc3 = **−0.002** (noise ke saath −0.009 … +0.005).
+  - Coverage anupaat k ≤ **+0.05**. Entry 12 ne 0.5 maana tha.
+- **Class 2 term poora (+0.021):** Δc3 = −0.031 banta hai. Ye mumkin nahi: channel main list ko sirf slots jitna
+  khiskaata hai, aur held-out pe ye nuksaan ~−0.002 tha.
+- To sangat padhna yahi hai: class 2 ka term bhi ~0 hai, aur hidden pe channel ke top 6 me answer lagbhag kabhi nahi
+  aata.
+
+**Kya nahi pata.** Do wajahein ho sakti hain, aur ye probe dono ko alag nahi karta:
+1. hidden ke answers pop2 me hain hi nahi (≥ 2 synonyms ka filter, ya official class 3 jo PubChem me nahi);
+2. answers pop2 me hain, lekin v17 ka scoring unhe 16M me se top 6 tak nahi laata.
+
+Field ka PubChem ablation (−0.055) batata hai ki PubChem me hidden ke kaafi answers hain. Isliye (2), ya unka
+pura PubChem, zyada mumkin lagta hai. Lekin ye andaza hai, naapa nahi gaya.
+
+**Belief jo badli.** splits_bigord ka non-env class 3 pool wale sawaalon pe hidden class 3 ka pratinidhi nahi hai.
+Ye teen me se teen baar hua hai: ChEMBL (§10–11), v16 (§31), v19b. Entry 12 ne "is baar alag hai" ke teen
+kaaran diye the. Dilution wala sahi nikla, kyunki nuksaan bhi ~0 hai. Lekin coverage ka 0.5 anupaat galat tha, aur
+field ka saboot hamare channel pe laagu nahi hua. Aage se pool ya coverage ka koi bhi held-out gain LB ka saboot
+nahi maana jaayega. Sirf LB probe hi jawab dega, aur woh bhi pre-registered.
