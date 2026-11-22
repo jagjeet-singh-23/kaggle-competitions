@@ -22,10 +22,10 @@ Every phase must be verified byte-identical. This plan is Phase 0. Phases 1–3 
 
 ## Global Constraints
 
-- Base commit `5b83c6f` on branch `worktree-refactor`, worktree `.claude/worktrees/refactor`. Paths below are relative to `MoleculeID-from-Mass-Spectra/` (written `MOD`).
-- Interpreter: `/Users/frustrated-dev/Developer/Personal/python_projects/kaggle-competitions/kaggle-competitions/.venv/bin/python` (written `PY`). It is uv-managed: run `uv pip install --dry-run` first and use no pip.
-- Shared data: `CASMI_DATA=/Users/frustrated-dev/Developer/Personal/python_projects/kaggle-competitions/kaggle-competitions/MoleculeID-from-Mass-Spectra/data` (written `D`). Golden outputs are written only under `$D/golden/` (git-ignored).
-- Model and meta files for the submit goldens come from `K=/Users/frustrated-dev/Developer/Personal/python_projects/kaggle-competitions/kaggle-competitions/.claude/worktrees/raasta-b-field/MoleculeID-from-Mass-Spectra/kernel/code`. Only files are read from there. The code under test is always `MOD`: `PYTHONPATH=MOD`, cwd `MOD`, `python -P`.
+- Base commit `5b83c6f` on branch `worktree-refactor`, worktree `.claude/worktrees/refactor`. Paths below are relative to `MoleculeID-from-Mass-Spectra/` (written `MOD`); `<repo>` is the main checkout's root.
+- Interpreter: `<repo>/.venv/bin/python` (written `PY`). It is uv-managed: run `uv pip install --dry-run` first and use no pip.
+- Shared data: `CASMI_DATA=<repo>/MoleculeID-from-Mass-Spectra/data` (written `D`). Golden outputs are written only under `$D/golden/` (git-ignored).
+- Model and meta files for the submit goldens come from `K=<repo>/.claude/worktrees/raasta-b-field/MoleculeID-from-Mass-Spectra/kernel/code`. Only files are read from there. The code under test is always `MOD`: `PYTHONPATH=MOD`, cwd `MOD`, `python -P`.
 - Equality is exact: sha256 for CSVs, and per-array equality for `.npz`. There are no tolerances.
 - Long runs go through `caffeinate -ims ../guard.sh` with `MIN_AVAIL_MB=2500`, one golden at a time. Never weaken `guard.sh`.
 - Code comments and docstrings are in English.

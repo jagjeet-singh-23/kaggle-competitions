@@ -24,6 +24,7 @@ import hashlib
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -31,8 +32,14 @@ import numpy as np
 
 MOD = Path(__file__).resolve().parent.parent
 REPO = MOD.parent
-PY = "/Users/frustrated-dev/Developer/Personal/python_projects/kaggle-competitions/kaggle-competitions/.venv/bin/python"
-D = "/Users/frustrated-dev/Developer/Personal/python_projects/kaggle-competitions/kaggle-competitions/MoleculeID-from-Mass-Spectra/data"
+# The interpreter running pytest also runs the cases.
+PY = sys.executable
+# The shared data dir lives in the main checkout, which every worktree finds through
+# git's common dir. A worktree's own data/ holds job scripts only.
+_MAIN = Path(subprocess.run(["git", "-C", str(MOD), "rev-parse", "--path-format=absolute",
+                             "--git-common-dir"], capture_output=True, text=True,
+                            check=True).stdout.strip()).parent
+D = str(_MAIN / MOD.name / "data")
 GUARD = str(REPO / "guard.sh")
 
 # Outputs and logs live in a per-worktree dir so two worktrees do not clobber each other.
