@@ -18,7 +18,6 @@ the MRR below is fiction.
 import os
 import sys
 import time
-from collections import defaultdict
 
 import numpy as np
 import torch
@@ -28,7 +27,7 @@ import prior
 import shifted
 from analog import ADDUCTS, Analog, BETA
 import fingerprint
-from fingerprint import Net, NBIN, BIN, predict
+from fingerprint import Net, BIN, predict
 from metric import mrr
 from search import Searcher, spectra_of
 
@@ -419,13 +418,13 @@ def submit(path=None, gamma=GAMMA):
             continue
         def search():
             t0 = time.time()
-            shift, positive = ADDUCTS[add[0]]
-            got = si.search(spectra, pm - shift, positive, kind=SHIFT_SIM)
+            shift, positive = ADDUCTS[add[0]]  # noqa: B023 -- used in this iteration
+            got = si.search(spectra, pm - shift, positive, kind=SHIFT_SIM)  # noqa: B023 -- used in this iteration
             clock["shift"] += time.time() - t0
             return got
         # Both callables are used inside this iteration only, so binding the loop's
         # spectra / pm / add late is safe.
-        fpq = _once(lambda: query_fp(model, spectra))
+        fpq = _once(lambda: query_fp(model, spectra))  # noqa: B023 -- used in this iteration
         relatives = _once(search) if si is not None else None
         total, sm, _, fp_raw = _score(an, spec, smiles, spectra, pm, add, gamma, bits, fpq,
                                       relatives, prior_of)

@@ -28,7 +28,7 @@ import time
 # them cost a run that died in one second. Find the directories by their contents
 # instead, and print the tree first so a wrong guess is diagnosable from the log.
 print("/kaggle/input contains:", flush=True)
-for dirpath, dirnames, files in os.walk("/kaggle/input"):
+for dirpath, _dirnames, files in os.walk("/kaggle/input"):
     depth = dirpath.count("/") - 2
     if depth <= 2:
         print(f"  {'  ' * depth}{dirpath}  ({len(files)} files)", flush=True)

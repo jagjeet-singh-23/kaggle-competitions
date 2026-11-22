@@ -1,0 +1,21 @@
+# Tool config only, no [build-system]: the modules stay flat files because the
+# Kaggle kernel ships them as a flat dataset folder.
+[project]
+name = "casmi26-molecule-id"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["golden: byte-identity tests against recorded outputs (~40 min)"]
+addopts = "-m 'not golden'"
+
+[tool.ruff]
+required-version = "==0.17.6"
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+# B905 adds zip(strict=True), a behaviour change; Phase 3
+ignore = ["B905"]
